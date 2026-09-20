@@ -1,16 +1,14 @@
-// Zalo Bot Webhook - hỗ trợ text, ảnh, keyboard demo
+// Zalo Bot Webhook - ảnh ≤ 5MB, vượt quá báo lỗi
 const SECRET_TOKEN = process.env.ZALO_SECRET_TOKEN || "5-r-FcilN7xnTfZm0n";
 const {
   sendMessage,
   sendPhoto,
-  sendSticker,
   sendChatAction,
   setChatKeyboard,
   deleteChatKeyboard,
-  uploadFile,
 } = require("./bot");
 
-// Ảnh demo (public URL)
+// Ảnh demo nhỏ (placehold.co thường < 100KB)
 const DEMO_PHOTO = "https://placehold.co/600x400/png?text=Zalo+Bot+Ontop";
 
 module.exports = async function handler(req, res) {
@@ -39,7 +37,6 @@ module.exports = async function handler(req, res) {
     const text = (message.text || "").trim();
     const lower = text.toLowerCase();
 
-    // Typing indicator
     await sendChatAction(chatId, "typing").catch(() => {});
 
     // ===== Commands =====
@@ -48,16 +45,19 @@ module.exports = async function handler(req, res) {
         chatId,
         "🤖 Bot Ontopcommunity sẵn sàng!\n\n" +
           "Lệnh thử:\n" +
-          "/photo - Gửi ảnh demo\n" +
+          "/photo - Gửi ảnh demo (≤ 5MB)\n" +
           "/keyboard - Hiện nút bàn phím\n" +
           "/hidekb - Ẩn bàn phím\n" +
           "/help - Trợ giúp\n\n" +
-          "Hoặc gửi bất kỳ tin nhắn nào để bot echo lại."
+          "Gửi link ảnh → bot sẽ gửi lại nếu ≤ 5MB\n" +
+          "Ảnh > 5MB sẽ bị từ chối và báo lỗi."
       );
     } else if (lower === "/photo" || lower === "photo" || lower === "ảnh") {
-      await sendPhoto(chatId, DEMO_PHOTO, "Ảnh demo từ Bot Ontop 📸");
+      const result = await sendPhoto(chatId, DEMO_PHOTO, "Ảnh demo từ Bot Ontop 📸 (≤ 5MB)");
+      if (result && result.ok === false) {
+        await sendMessage(chatId, `❌ ${result.error}`);
+      }
     } else if (lower === "/keyboard" || lower === "keyboard" || lower === "nút") {
-      // Thử set reply keyboard (nếu API hỗ trợ)
       const kb = {
         keyboard: [
           [{ text: "📷 Gửi ảnh" }, { text: "ℹ️ Help" }],
@@ -68,11 +68,9 @@ module.exports = async function handler(req, res) {
       };
       const kbResult = await setChatKeyboard(chatId, kb);
       if (kbResult && kbResult.ok === false) {
-        // Fallback: gửi text hướng dẫn nếu API keyboard chưa có
         await sendMessage(
           chatId,
-          "⚠️ setChatKeyboard chưa được hỗ trợ trên API chính thức hiện tại.\n" +
-            "Bạn vẫn có thể dùng lệnh:\n/photo\n/help"
+          "⚠️ setChatKeyboard chưa được hỗ trợ trên API chính thức.\nDùng lệnh: /photo  /help"
         );
       } else {
         await sendMessage(chatId, "Đã hiện bàn phím nhanh bên dưới 👇");
@@ -85,15 +83,28 @@ module.exports = async function handler(req, res) {
         chatId,
         "📖 Hướng dẫn\n\n" +
           "• Gửi text → bot echo lại\n" +
-          "• /photo → gửi ảnh (URL)\n" +
+          "• /photo → gửi ảnh demo (≤ 5MB)\n" +
+          "• Gửi link ảnh (https://...) → bot gửi lại nếu ≤ 5MB\n" +
+          "• Ảnh > 5MB → báo lỗi, không gửi\n" +
           "• /keyboard → thử hiện nút\n" +
-          "• /hidekb → ẩn nút\n\n" +
-          "Lưu ý: Gửi file/ảnh dung lượng lớn phụ thuộc giới hạn Zalo (thường vài MB–chục MB). Không có unlimited."
+          "• /hidekb → ẩn nút"
       );
     } else if (lower === "📷 gửi ảnh" || lower.includes("gửi ảnh")) {
-      await sendPhoto(chatId, DEMO_PHOTO, "Ảnh theo yêu cầu từ nút 📷");
+      const result = await sendPhoto(chatId, DEMO_PHOTO, "Ảnh theo yêu cầu từ nút 📷");
+      if (result && result.ok === false) {
+        await sendMessage(chatId, `❌ ${result.error}`);
+      }
+    } else if (/^https?:\/\/.+\.(jpg|jpeg|png|gif|webp|bmp)(\?.*)?$/i.test(text) || /^https?:\/\/.+/i.test(text) && text.includes("http")) {
+      // User gửi link ảnh → thử gửi lại với check 5MB
+      const result = await sendPhoto(chatId, text, "Ảnh bạn gửi (đã kiểm tra ≤ 5MB)");
+      if (result && result.ok === false) {
+        await sendMessage(chatId, `❌ ${result.error}`);
+      } else if (result && result.ok) {
+        // đã gửi thành công
+      } else {
+        await sendMessage(chatId, "Không gửi được ảnh. Kiểm tra lại URL.");
+      }
     } else if (text) {
-      // Echo text
       await sendMessage(chatId, `Bot nhận được: ${text}`);
     } else if (message.photo || event.event_name === "message.image.received") {
       await sendMessage(chatId, "Đã nhận ảnh của bạn 📸 (bot chưa lưu/ xử lý ảnh đầu vào).");
