@@ -1,23 +1,17 @@
-// Zalo Bot Webhook Handler
+// Zalo Bot Webhook - hỗ trợ text, ảnh, keyboard demo
 const SECRET_TOKEN = process.env.ZALO_SECRET_TOKEN || "5-r-FcilN7xnTfZm0n";
-const BOT_TOKEN = process.env.ZALO_BOT_TOKEN || "3415615569922217583:GOsmyGCVFMUxhXvOQXQKGNAKYYvpwovhxCwtCWlzMNpLqDJcdYfgOSSQqLaNUpQc";
-const API_BASE = `https://bot-api.zaloplatforms.com/bot${BOT_TOKEN}`;
+const {
+  sendMessage,
+  sendPhoto,
+  sendSticker,
+  sendChatAction,
+  setChatKeyboard,
+  deleteChatKeyboard,
+  uploadFile,
+} = require("./bot");
 
-async function sendMessage(chatId, text) {
-  try {
-    const res = await fetch(`${API_BASE}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text }),
-    });
-    const data = await res.json();
-    console.log("sendMessage result:", JSON.stringify(data));
-    return data;
-  } catch (err) {
-    console.error("sendMessage error:", err);
-    return null;
-  }
-}
+// Ảnh demo (public URL)
+const DEMO_PHOTO = "https://placehold.co/600x400/png?text=Zalo+Bot+Ontop";
 
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
@@ -34,29 +28,82 @@ module.exports = async function handler(req, res) {
     const body = req.body;
     console.log("Received event:", JSON.stringify(body, null, 2));
 
-    // Payload có thể là { ok, result: { event_name, message } } hoặc trực tiếp event
     const event = body.result || body;
-    const eventName = event.event_name || body.event_name;
     const message = event.message || body.message;
 
-    if (message && message.chat && message.chat.id) {
-      const chatId = message.chat.id;
-      const text = message.text || "";
+    if (!message || !message.chat || !message.chat.id) {
+      return res.status(200).json({ ok: true, note: "no message" });
+    }
 
-      console.log(`Message from chat ${chatId}: ${text}`);
+    const chatId = message.chat.id;
+    const text = (message.text || "").trim();
+    const lower = text.toLowerCase();
 
-      // Auto reply
-      if (text) {
-        await sendMessage(chatId, `Bot nhận được: ${text}`);
+    // Typing indicator
+    await sendChatAction(chatId, "typing").catch(() => {});
+
+    // ===== Commands =====
+    if (lower === "/start" || lower === "start" || lower === "menu") {
+      await sendMessage(
+        chatId,
+        "🤖 Bot Ontopcommunity sẵn sàng!\n\n" +
+          "Lệnh thử:\n" +
+          "/photo - Gửi ảnh demo\n" +
+          "/keyboard - Hiện nút bàn phím\n" +
+          "/hidekb - Ẩn bàn phím\n" +
+          "/help - Trợ giúp\n\n" +
+          "Hoặc gửi bất kỳ tin nhắn nào để bot echo lại."
+      );
+    } else if (lower === "/photo" || lower === "photo" || lower === "ảnh") {
+      await sendPhoto(chatId, DEMO_PHOTO, "Ảnh demo từ Bot Ontop 📸");
+    } else if (lower === "/keyboard" || lower === "keyboard" || lower === "nút") {
+      // Thử set reply keyboard (nếu API hỗ trợ)
+      const kb = {
+        keyboard: [
+          [{ text: "📷 Gửi ảnh" }, { text: "ℹ️ Help" }],
+          [{ text: "Ẩn bàn phím" }],
+        ],
+        resize_keyboard: true,
+        one_time_keyboard: false,
+      };
+      const kbResult = await setChatKeyboard(chatId, kb);
+      if (kbResult && kbResult.ok === false) {
+        // Fallback: gửi text hướng dẫn nếu API keyboard chưa có
+        await sendMessage(
+          chatId,
+          "⚠️ setChatKeyboard chưa được hỗ trợ trên API chính thức hiện tại.\n" +
+            "Bạn vẫn có thể dùng lệnh:\n/photo\n/help"
+        );
       } else {
-        await sendMessage(chatId, "Bot đã nhận tin nhắn của bạn (không phải text).");
+        await sendMessage(chatId, "Đã hiện bàn phím nhanh bên dưới 👇");
       }
+    } else if (lower === "/hidekb" || lower === "ẩn bàn phím" || lower === "ẩn") {
+      await deleteChatKeyboard(chatId);
+      await sendMessage(chatId, "Đã ẩn bàn phím.");
+    } else if (lower === "/help" || lower === "help" || lower === "ℹ️ help") {
+      await sendMessage(
+        chatId,
+        "📖 Hướng dẫn\n\n" +
+          "• Gửi text → bot echo lại\n" +
+          "• /photo → gửi ảnh (URL)\n" +
+          "• /keyboard → thử hiện nút\n" +
+          "• /hidekb → ẩn nút\n\n" +
+          "Lưu ý: Gửi file/ảnh dung lượng lớn phụ thuộc giới hạn Zalo (thường vài MB–chục MB). Không có unlimited."
+      );
+    } else if (lower === "📷 gửi ảnh" || lower.includes("gửi ảnh")) {
+      await sendPhoto(chatId, DEMO_PHOTO, "Ảnh theo yêu cầu từ nút 📷");
+    } else if (text) {
+      // Echo text
+      await sendMessage(chatId, `Bot nhận được: ${text}`);
+    } else if (message.photo || event.event_name === "message.image.received") {
+      await sendMessage(chatId, "Đã nhận ảnh của bạn 📸 (bot chưa lưu/ xử lý ảnh đầu vào).");
+    } else {
+      await sendMessage(chatId, "Bot đã nhận tin nhắn (loại khác text).");
     }
 
     return res.status(200).json({ ok: true });
   } catch (err) {
     console.error("Webhook error:", err);
-    // Vẫn trả 200 để Zalo không retry liên tục
-    return res.status(200).json({ ok: true, error: String(err.message) });
+    return res.status(200).json({ ok: true, error: String(err.message || err) });
   }
 };
