@@ -1,7 +1,5 @@
-/**
- * TikTok helper - gọi API tiktokvippro.vercel.app
- */
 const TIKTOK_API = process.env.TIKTOK_API_BASE || "https://tiktokvippro.vercel.app";
+const SITE_BASE = process.env.SITE_BASE || "https://nminhontop.vercel.app";
 
 function formatNumber(n) {
   n = Number(n) || 0;
@@ -53,62 +51,73 @@ async function getVideo(videoUrl) {
   return data;
 }
 
+function watchUrl(videoId, uniqueId) {
+  const q = new URLSearchParams();
+  q.set("video", String(videoId || ""));
+  if (uniqueId) q.set("user", String(uniqueId));
+  return `${SITE_BASE}/tiktok?${q.toString()}`;
+}
+
 function formatUserCaption(data) {
   const a = data.author || {};
   const sf = data.stats_formatted || {};
   const sr = data.stats_raw || {};
-  const videos = data.videos || {};
+  const ver = a.verified ? " ✓" : "";
 
-  const lines = [
-    "📱 Thông Tin Tiktok",
+  return [
+    "━━━━━━━━━━━━━━━━",
+    "⚡ THÔNG TIN TIKTOK",
+    "━━━━━━━━━━━━━━━━",
     "",
-    `👤 Tên: ${a.nickname || "N/A"}`,
-    `🆔 Username: @${a.uniqueId || "N/A"}`,
-    `🔢 ID: ${a.id || "N/A"}`,
-    `👥 Followers: ${sf.follower || formatNumber(sr.follower)}`,
-    `➡️ Following: ${sf.following || formatNumber(sr.following)}`,
-    `❤️ Tổng tim: ${sf.heart || formatNumber(sr.heart)}`,
-    `🎬 Số video: ${sf.video || formatNumber(sr.video)}`,
-    `📅 Tạo acc: ${formatDate(a.createTime)}`,
-  ];
-
-  if (videos.newest?.link) lines.push(`🆕 Video mới nhất: ${videos.newest.link}`);
-  else lines.push(`🆕 Video mới nhất: N/A`);
-
-  if (videos.oldest_fetched?.link) lines.push(`📼 Video cũ: ${videos.oldest_fetched.link}`);
-  else lines.push(`📼 Video cũ nhất: N/A`);
-
-  if (a.signature) lines.push(`📝 Bio: ${String(a.signature).slice(0, 120)}`);
-  if (a.bioLink) lines.push(`🔗 Bio link: ${a.bioLink}`);
-
-  return lines.join("\n");
+    `✦ Tên: ${a.nickname || "N/A"}${ver}`,
+    `✦ Username: @${a.uniqueId || "N/A"}`,
+    `✦ ID: ${a.id || "N/A"}`,
+    "",
+    `◉ Followers  ${sf.follower || formatNumber(sr.follower)}`,
+    `◉ Following  ${sf.following || formatNumber(sr.following)}`,
+    `◉ Tổng tim   ${sf.heart || formatNumber(sr.heart)}`,
+    `◉ Video      ${sf.video || formatNumber(sr.video)}`,
+    "",
+    `◷ Tạo acc: ${formatDate(a.createTime)}`,
+    a.signature ? `\n◈ Bio: ${String(a.signature).replace(/\n/g, " ").slice(0, 100)}` : "",
+    a.bioLink ? `◈ Link: ${a.bioLink}` : "",
+    "",
+    "━━━━━━━━━━━━━━━━",
+  ]
+    .filter((l) => l !== "")
+    .join("\n");
 }
 
 function formatVideoCaption(data) {
   const a = data.author || {};
   const v = data.video_data || {};
   const s = data.stats || {};
-  const urls = data.urls || {};
+  const ver = a.verified ? " ✓" : "";
+  const page = watchUrl(v.id, a.uniqueId);
 
-  const lines = [
-    "🎬 Thông Tin Video TikTok",
+  return [
+    "━━━━━━━━━━━━━━━━",
+    "▶ VIDEO TIKTOK",
+    "━━━━━━━━━━━━━━━━",
     "",
-    `👤 Chủ kênh: ${a.nickname || "N/A"} (@${a.uniqueId || "N/A"})`,
-    `🔢 ID video: ${v.id || "N/A"}`,
-    `📝 Caption: ${String(v.description || "N/A").slice(0, 300)}`,
-    `📅 Ngày đăng: ${formatDate(v.create_time)}`,
-    `👁 View: ${formatNumber(s.play)}`,
-    `❤️ Tim: ${formatNumber(s.like)}`,
-    `💬 Bình luận: ${formatNumber(s.comment)}`,
-    `🔄 Chia sẻ: ${formatNumber(s.share)}`,
-  ];
-
-  if (urls.no_watermark) lines.push(`⬇️ Tải không logo: ${urls.no_watermark}`);
-  if (a.uniqueId && v.id) {
-    lines.push(`🔗 Link: https://www.tiktok.com/@${a.uniqueId}/video/${v.id}`);
-  }
-
-  return lines.join("\n");
+    `✦ Chủ kênh: ${a.nickname || "N/A"}${ver}`,
+    `✦ @${a.uniqueId || "N/A"}`,
+    `✦ ID: ${v.id || "N/A"}`,
+    "",
+    `◉ View     ${formatNumber(s.play)}`,
+    `◉ Tim      ${formatNumber(s.like)}`,
+    `◉ Comment  ${formatNumber(s.comment)}`,
+    `◉ Share    ${formatNumber(s.share)}`,
+    "",
+    `◷ Đăng: ${formatDate(v.create_time)}`,
+    "",
+    `◈ ${String(v.description || "").replace(/\n/g, " ").slice(0, 160) || "—"}`,
+    "",
+    "━━━━━━━━━━━━━━━━",
+    "⬇ Xem & tải tại:",
+    page,
+    "━━━━━━━━━━━━━━━━",
+  ].join("\n");
 }
 
 module.exports = {
@@ -116,7 +125,9 @@ module.exports = {
   getVideo,
   formatUserCaption,
   formatVideoCaption,
+  watchUrl,
   formatNumber,
   formatDate,
   TIKTOK_API,
+  SITE_BASE,
 };

@@ -1,9 +1,10 @@
-// Zalo Bot Webhook - TikTok /tiktok + /video (không search, không proxy)
 const SECRET_TOKEN = process.env.ZALO_SECRET_TOKEN || "5-r-FcilN7xnTfZm0n";
 const {
   sendMessage,
   sendPhoto,
   sendChatAction,
+  deleteMessage,
+  extractMessageId,
   setChatKeyboard,
   deleteChatKeyboard,
 } = require("./bot");
@@ -15,6 +16,20 @@ const {
 } = require("./tiktok");
 
 const DEMO_PHOTO = "https://placehold.co/600x400/png?text=Zalo+Bot+Ontop";
+
+async function sendWaiting(chatId, text) {
+  const r = await sendMessage(chatId, text);
+  return extractMessageId(r);
+}
+
+async function clearWaiting(chatId, msgId) {
+  if (!msgId) return;
+  try {
+    await deleteMessage(chatId, msgId);
+  } catch (e) {
+    console.warn("deleteMessage fail:", e.message);
+  }
+}
 
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
@@ -28,11 +43,10 @@ module.exports = async function handler(req, res) {
 
   try {
     const body = req.body;
-    console.log("Event:", JSON.stringify(body).slice(0, 800));
+    console.log("Event:", JSON.stringify(body).slice(0, 600));
 
     const event = body.result || body;
     const message = event.message || body.message;
-
     if (!message?.chat?.id) {
       return res.status(200).json({ ok: true, note: "no message" });
     }
@@ -43,16 +57,16 @@ module.exports = async function handler(req, res) {
 
     await sendChatAction(chatId, "typing").catch(() => {});
 
-    // ===== /tiktok {username} =====
+    // /tiktok
     if (lower.startsWith("/tiktok") || lower.startsWith("tiktok ")) {
-      const parts = text.split(/\s+/);
-      const username = parts[1]?.replace(/^@/, "");
+      const username = text.split(/\s+/)[1]?.replace(/^@/, "");
       if (!username) {
-        await sendMessage(chatId, "Cú pháp: /tiktok {username}\nVí dụ: /tiktok ontopcommunity");
+        await sendMessage(chatId, "✦ Cú pháp: /tiktok {username}\nVí dụ: /tiktok ontopcommunity");
         return res.status(200).json({ ok: true });
       }
+      let waitId = null;
       try {
-        await sendMessage(chatId, `⏳ Đang lấy thông tin @${username}...`);
+        waitId = await sendWaiting(chatId, `⏳ Đang soi @${username}...`);
         const data = await getUser(username);
         const caption = formatUserCaption(data);
         const avatar = data.author?.avatar;
@@ -60,30 +74,32 @@ module.exports = async function handler(req, res) {
           const photoRes = await sendPhoto(chatId, avatar, caption);
           if (photoRes && photoRes.ok === false) {
             await sendMessage(chatId, caption);
-            if (photoRes.error) await sendMessage(chatId, `⚠️ Avatar: ${photoRes.error}`);
           }
         } else {
           await sendMessage(chatId, caption);
         }
       } catch (e) {
-        await sendMessage(chatId, `❌ Lỗi: ${e.message}`);
+        await sendMessage(chatId, `✖ Lỗi: ${e.message}`);
+      } finally {
+        await clearWaiting(chatId, waitId);
       }
       return res.status(200).json({ ok: true });
     }
 
-    // ===== /video {link} =====
+    // /video — 1 tin kết quả (có link trang tải), không spam link mp4
     if (lower.startsWith("/video") || lower.startsWith("video ")) {
       const linkMatch = text.match(/https?:\/\/[^\s]+/);
       const link = linkMatch ? linkMatch[0] : null;
       if (!link) {
         await sendMessage(
           chatId,
-          "Cú pháp: /video {link TikTok}\nVí dụ: /video https://vm.tiktok.com/ZSVvFHtAg/"
+          "✦ Cú pháp: /video {link TikTok}\nVí dụ: /video https://vm.tiktok.com/..."
         );
         return res.status(200).json({ ok: true });
       }
+      let waitId = null;
       try {
-        await sendMessage(chatId, "⏳ Đang lấy thông tin video...");
+        waitId = await sendWaiting(chatId, "⏳ Đang lấy video...");
         const data = await getVideo(link);
         const caption = formatVideoCaption(data);
         const cover = data.urls?.cover || data.urls?.coverHD;
@@ -95,58 +111,49 @@ module.exports = async function handler(req, res) {
         } else {
           await sendMessage(chatId, caption);
         }
-        if (data.urls?.no_watermark) {
-          await sendMessage(chatId, `⬇️ Link tải không logo:\n${data.urls.no_watermark}`);
-        }
       } catch (e) {
-        await sendMessage(chatId, `❌ Lỗi: ${e.message}`);
+        await sendMessage(chatId, `✖ Lỗi: ${e.message}`);
+      } finally {
+        await clearWaiting(chatId, waitId);
       }
       return res.status(200).json({ ok: true });
     }
 
-    // ===== Basic =====
     if (lower === "/start" || lower === "start" || lower === "menu") {
       await sendMessage(
         chatId,
-        "🤖 Bot Ontopcommunity\n\n" +
-          "📌 TikTok:\n" +
-          "/tiktok {username} — thông tin acc + avatar\n" +
-          "/video {link} — thông tin video + link tải\n\n" +
-          "Khác:\n/photo /help"
+        "━━━━━━━━━━━━━━━━\n⚡ BOT ONTOP\n━━━━━━━━━━━━━━━━\n\n" +
+          "▸ /tiktok {user} — profile + avatar\n" +
+          "▸ /video {link} — info + trang tải\n" +
+          "▸ /help — trợ giúp\n\n" +
+          "━━━━━━━━━━━━━━━━"
       );
-    } else if (lower === "/photo" || lower === "photo" || lower === "ảnh") {
-      const result = await sendPhoto(chatId, DEMO_PHOTO, "Ảnh demo (≤ 5MB)");
-      if (result?.ok === false) await sendMessage(chatId, `❌ ${result.error}`);
+    } else if (lower === "/photo" || lower === "photo") {
+      const result = await sendPhoto(chatId, DEMO_PHOTO, "✦ Ảnh demo (≤ 5MB)");
+      if (result?.ok === false) await sendMessage(chatId, `✖ ${result.error}`);
     } else if (lower === "/help" || lower === "help") {
       await sendMessage(
         chatId,
-        "📖 Lệnh:\n" +
+        "━━━━━━━━━━━━━━━━\n📖 LỆNH\n━━━━━━━━━━━━━━━━\n\n" +
           "/tiktok ontopcommunity\n" +
-          "/video https://vm.tiktok.com/...\n" +
-          "/photo — ảnh demo\n" +
-          "Ảnh gửi qua bot tối đa 5MB."
+          "/video https://vm.tiktok.com/...\n\n" +
+          "Trang tải: nminhontop.vercel.app/tiktok\n" +
+          "━━━━━━━━━━━━━━━━"
       );
-    } else if (lower === "/keyboard" || lower === "keyboard") {
-      const kb = {
-        keyboard: [
-          [{ text: "/tiktok ontopcommunity" }, { text: "/help" }],
-          [{ text: "Ẩn bàn phím" }],
-        ],
+    } else if (lower === "/keyboard") {
+      const r = await setChatKeyboard(chatId, {
+        keyboard: [[{ text: "/help" }], [{ text: "Ẩn bàn phím" }]],
         resize_keyboard: true,
-      };
-      const r = await setChatKeyboard(chatId, kb);
-      if (r?.ok === false) {
-        await sendMessage(chatId, "Keyboard API chưa hỗ trợ. Dùng lệnh text.");
-      } else {
-        await sendMessage(chatId, "Đã hiện bàn phím 👇");
-      }
+      });
+      if (r?.ok === false) await sendMessage(chatId, "Keyboard chưa hỗ trợ.");
+      else await sendMessage(chatId, "✦ Đã hiện bàn phím");
     } else if (lower === "/hidekb" || lower === "ẩn bàn phím" || lower === "ẩn") {
       await deleteChatKeyboard(chatId);
-      await sendMessage(chatId, "Đã ẩn bàn phím.");
+      await sendMessage(chatId, "✦ Đã ẩn bàn phím");
     } else if (text) {
-      await sendMessage(chatId, `Bot nhận: ${text}\nGõ /help để xem lệnh.`);
+      await sendMessage(chatId, `▸ ${text}\nGõ /help để xem lệnh.`);
     } else {
-      await sendMessage(chatId, "Bot đã nhận tin nhắn.");
+      await sendMessage(chatId, "✦ Đã nhận tin nhắn.");
     }
 
     return res.status(200).json({ ok: true });
