@@ -1,4 +1,4 @@
-// Zalo Bot Webhook - TikTok commands + media
+// Zalo Bot Webhook - TikTok /tiktok + /video (không search, không proxy)
 const SECRET_TOKEN = process.env.ZALO_SECRET_TOKEN || "5-r-FcilN7xnTfZm0n";
 const {
   sendMessage,
@@ -10,16 +10,11 @@ const {
 const {
   getUser,
   getVideo,
-  searchVideos,
   formatUserCaption,
   formatVideoCaption,
-  formatSearchList,
 } = require("./tiktok");
 
 const DEMO_PHOTO = "https://placehold.co/600x400/png?text=Zalo+Bot+Ontop";
-
-// Lưu kết quả search theo chat_id (memory - reset khi cold start)
-const searchCache = globalThis.__zaloSearchCache || (globalThis.__zaloSearchCache = new Map());
 
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
@@ -64,7 +59,6 @@ module.exports = async function handler(req, res) {
         if (avatar) {
           const photoRes = await sendPhoto(chatId, avatar, caption);
           if (photoRes && photoRes.ok === false) {
-            // Avatar quá lớn hoặc lỗi → gửi text
             await sendMessage(chatId, caption);
             if (photoRes.error) await sendMessage(chatId, `⚠️ Avatar: ${photoRes.error}`);
           }
@@ -101,7 +95,6 @@ module.exports = async function handler(req, res) {
         } else {
           await sendMessage(chatId, caption);
         }
-        // Gửi link tải riêng nếu dài
         if (data.urls?.no_watermark) {
           await sendMessage(chatId, `⬇️ Link tải không logo:\n${data.urls.no_watermark}`);
         }
@@ -111,82 +104,15 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ ok: true });
     }
 
-    // ===== /search {keyword} {count?} =====
-    if (lower.startsWith("/search") || lower.startsWith("search ")) {
-      const parts = text.split(/\s+/);
-      // /search keyword... count
-      let count = 10;
-      let keywordParts = parts.slice(1);
-      if (keywordParts.length > 1 && /^\d+$/.test(keywordParts[keywordParts.length - 1])) {
-        count = parseInt(keywordParts.pop(), 10);
-      }
-      const keyword = keywordParts.join(" ").trim();
-      if (!keyword) {
-        await sendMessage(
-          chatId,
-          "Cú pháp: /search {từ khóa} {số lượng}\nVí dụ: /search ontopcommunity 10\n(Mặc định 10 video)"
-        );
-        return res.status(200).json({ ok: true });
-      }
-      try {
-        await sendMessage(chatId, `⏳ Đang tìm "${keyword}"...`);
-        const videos = await searchVideos(keyword, count);
-        searchCache.set(chatId, { videos, keyword, at: Date.now() });
-        await sendMessage(chatId, formatSearchList(videos, keyword));
-      } catch (e) {
-        await sendMessage(
-          chatId,
-          `❌ Search lỗi: ${e.message}\n\nGợi ý: dùng /tiktok {user} hoặc /video {link}`
-        );
-      }
-      return res.status(200).json({ ok: true });
-    }
-
-    // ===== Số sau search → chi tiết video =====
-    if (/^\d{1,2}$/.test(text)) {
-      const cached = searchCache.get(chatId);
-      if (cached && Date.now() - cached.at < 30 * 60 * 1000) {
-        const idx = parseInt(text, 10) - 1;
-        const v = cached.videos[idx];
-        if (!v) {
-          await sendMessage(chatId, `Không có video số ${text}. Chọn 1–${cached.videos.length}`);
-          return res.status(200).json({ ok: true });
-        }
-        const link =
-          v.link ||
-          `https://www.tiktok.com/@${v.author?.unique_id || v.author?.uniqueId || "user"}/video/${v.id || v.video_id}`;
-        try {
-          await sendMessage(chatId, `⏳ Lấy chi tiết video #${text}...`);
-          const data = await getVideo(link);
-          const caption = formatVideoCaption(data);
-          const cover = data.urls?.cover || data.urls?.coverHD || v.cover;
-          if (cover) {
-            const photoRes = await sendPhoto(chatId, cover, caption.slice(0, 1900));
-            if (photoRes && photoRes.ok === false) await sendMessage(chatId, caption);
-          } else {
-            await sendMessage(chatId, caption);
-          }
-          if (data.urls?.no_watermark) {
-            await sendMessage(chatId, `⬇️ Tải không logo:\n${data.urls.no_watermark}`);
-          }
-        } catch (e) {
-          await sendMessage(chatId, `❌ ${e.message}\nLink: ${link}`);
-        }
-        return res.status(200).json({ ok: true });
-      }
-    }
-
-    // ===== Basic commands =====
+    // ===== Basic =====
     if (lower === "/start" || lower === "start" || lower === "menu") {
       await sendMessage(
         chatId,
         "🤖 Bot Ontopcommunity\n\n" +
           "📌 TikTok:\n" +
           "/tiktok {username} — thông tin acc + avatar\n" +
-          "/video {link} — thông tin video + link tải\n" +
-          "/search {từ khóa} {số} — tìm video (mặc định 10)\n" +
-          "  → nhắn số để xem chi tiết\n\n" +
-          "Khác:\n/photo /help /keyboard"
+          "/video {link} — thông tin video + link tải\n\n" +
+          "Khác:\n/photo /help"
       );
     } else if (lower === "/photo" || lower === "photo" || lower === "ảnh") {
       const result = await sendPhoto(chatId, DEMO_PHOTO, "Ảnh demo (≤ 5MB)");
@@ -197,7 +123,6 @@ module.exports = async function handler(req, res) {
         "📖 Lệnh:\n" +
           "/tiktok ontopcommunity\n" +
           "/video https://vm.tiktok.com/...\n" +
-          "/search dance 5\n" +
           "/photo — ảnh demo\n" +
           "Ảnh gửi qua bot tối đa 5MB."
       );
