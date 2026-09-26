@@ -175,14 +175,15 @@ module.exports = async function handler(req, res) {
     if (lower.startsWith("/tasks") || lower.startsWith("tasks ")) {
       const type = args[0];
       const nickchay = args[1] || "";
+      const envCode = args[2] || type;
       if (!type) {
-        await sendMessage(chatId, "✦ Cú pháp: /tasks {type} [nickchay]\nVí dụ: /tasks A nick1");
+        await sendMessage(chatId, "✦ Cú pháp: /tasks {type} [nickchay] [envCode]\nVí dụ: /tasks like nick1 env_01");
         return res.status(200).json({ ok: true });
       }
       let waitId = null;
       try {
-        waitId = await sendWaiting(chatId, `⏳ Lấy nhiệm vụ type=${type}...`);
-        const data = await doFetchTasks(type, nickchay);
+        waitId = await sendWaiting(chatId, `⏳ Lấy nhiệm vụ type=${type} env=${envCode}...`);
+        const data = await doFetchTasks(type, nickchay, envCode);
         await sendMessage(chatId, `📋 Tasks\n\`\`\`\n${fmtJson(data)}\n\`\`\``);
       } catch (e) {
         await sendMessage(chatId, `✖ Tasks lỗi: ${e.message}`);
@@ -195,15 +196,17 @@ module.exports = async function handler(req, res) {
     // /claim <id|id1,id2> [nickchay]
     if (lower.startsWith("/claim") || lower.startsWith("claim ")) {
       const ids = args[0];
-      const nickchay = args[1] || "";
+      const type = args[1] || "";
+      const nickchay = args[2] || "";
+      const envCode = args[3] || type;
       if (!ids) {
-        await sendMessage(chatId, "✦ Cú pháp: /claim {id} [nickchay]\nVí dụ: /claim 123,456 nick1");
+        await sendMessage(chatId, "✦ Cú pháp: /claim {id} {type} [nickchay] [envCode]\nVí dụ: /claim 889900 like nick1 env_01");
         return res.status(200).json({ ok: true });
       }
       let waitId = null;
       try {
         waitId = await sendWaiting(chatId, "⏳ Claim nhiệm vụ...");
-        const data = await doClaim(ids, nickchay);
+        const data = await doClaim(ids, type, nickchay, envCode);
         await sendMessage(chatId, `✅ Claim\n\`\`\`\n${fmtJson(data)}\n\`\`\``);
       } catch (e) {
         await sendMessage(chatId, `✖ Claim lỗi: ${e.message}`);
@@ -350,8 +353,8 @@ module.exports = async function handler(req, res) {
           "── Nhiệm vụ ──\n" +
           "▸ /login\n" +
           "▸ /config {loai} {id}\n" +
-          "▸ /tasks {type} [nick]\n" +
-          "▸ /claim {id} [nick]\n\n" +
+          "▸ /tasks {type} [nick] [env]\n" +
+          "▸ /claim {id} {type} [nick] [env]\n\n" +
           "── Đơn hàng ──\n" +
           "▸ /services\n" +
           "▸ /order {svc} {link} {qty}\n" +
@@ -375,8 +378,8 @@ module.exports = async function handler(req, res) {
           "NHIỆM VỤ (session)\n" +
           "/login — test PHPSESSID\n" +
           "/config loai id\n" +
-          "/tasks type [nickchay]\n" +
-          "/claim id1,id2 [nickchay]\n\n" +
+          "/tasks type [nickchay] [envCode]\n" +
+          "/claim id type [nickchay] [envCode]\n\n" +
           "ĐƠN HÀNG (API key)\n" +
           "/services — danh mục\n" +
           "/order service link qty [cmt]\n" +
