@@ -1,4 +1,5 @@
-const SECRET_TOKEN = process.env.ZALO_SECRET_TOKEN || "5-r-FcilN7xnTfZm0n";
+const SECRET_TOKEN = process.env.ZALO_SECRET_TOKEN;
+if (!SECRET_TOKEN) throw new Error("Missing ZALO_SECRET_TOKEN env");
 const {
   sendMessage,
   sendPhoto,

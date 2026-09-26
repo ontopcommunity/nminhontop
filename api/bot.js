@@ -2,7 +2,8 @@
  * Zalo Bot Platform helpers
  */
 
-const BOT_TOKEN = process.env.ZALO_BOT_TOKEN || "3415615569922217583:GOsmyGCVFMUxhXvOQXQKGNAKYYvpwovhxCwtCWlzMNpLqDJcdYfgOSSQqLaNUpQc";
+const BOT_TOKEN = process.env.ZALO_BOT_TOKEN;
+if (!BOT_TOKEN) throw new Error("Missing ZALO_BOT_TOKEN env");
 const API_BASE = `https://bot-api.zaloplatforms.com/bot${BOT_TOKEN}`;
 const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
 
