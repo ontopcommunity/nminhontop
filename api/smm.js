@@ -1,26 +1,41 @@
 /**
  * SMM / Task Execution + Procurement API helpers
- * Tất cả endpoint + token lấy từ env (Vercel)
+ * Chỉ cần 1 env link: API_BASE
+ * Các path cụ thể được chia sẵn trong code
  */
 
+const API_BASE = (process.env.API_BASE || "").replace(/\/+$/, ""); // bỏ dấu / cuối
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN || "";
 const API_KEY = process.env.API_KEY || "";
 
-const API_LOGIN = process.env.API_LOGIN || "";
-const API_CONFIG = process.env.API_CONFIG || "";
-const API_TASKS = process.env.API_TASKS || "";
-const API_CLAIM = process.env.API_CLAIM || "";
-const API_PROCUREMENT = process.env.API_PROCUREMENT || ""; // endpoint chung POST action=...
+// ========== PATHS (chia sẵn trong mã nguồn) ==========
+// Mày chỉ cần set API_BASE = https://domain.com
+// Các endpoint bên dưới sẽ tự ghép
+const PATHS = {
+  // Module Vận hành Nhiệm vụ
+  login: "/api/login",           // POST access_token → nhận PHPSESSID
+  config: "/api/config",         // GET loai, id
+  tasks: "/api/tasks",           // GET type, nickchay
+  claim: "/api/claim",           // POST id, nickchay
 
-function ensure(name, val) {
-  if (!val) throw new Error(`Thiếu env ${name}. Hãy set trên Vercel.`);
+  // Module Cung ứng (thường là 1 endpoint chung)
+  procurement: "/api/v2",        // POST key + action=services|add|status|balance|cancel|boost
+};
+
+function ensureBase() {
+  if (!API_BASE) throw new Error("Thiếu env API_BASE. Hãy set trên Vercel (ví dụ: https://panel.example.com)");
+}
+
+function url(path) {
+  ensureBase();
+  return API_BASE + path;
 }
 
 async function loginSession() {
-  ensure("API_LOGIN", API_LOGIN);
-  ensure("ACCESS_TOKEN", ACCESS_TOKEN);
+  ensureBase();
+  if (!ACCESS_TOKEN) throw new Error("Thiếu env ACCESS_TOKEN");
 
-  const res = await fetch(API_LOGIN, {
+  const res = await fetch(url(PATHS.login), {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ access_token: ACCESS_TOKEN }).toString(),
@@ -36,9 +51,8 @@ async function loginSession() {
   return `PHPSESSID=${match[1]}`;
 }
 
-async function taskRequest(url, method = "GET", params = {}, cookie = null) {
-  ensure("API_* task", url);
-  let finalUrl = url;
+async function taskRequest(path, method = "GET", params = {}, cookie = null) {
+  let finalUrl = url(path);
   const opts = {
     method,
     headers: {
@@ -50,7 +64,7 @@ async function taskRequest(url, method = "GET", params = {}, cookie = null) {
 
   if (method === "GET") {
     const q = new URLSearchParams(params).toString();
-    if (q) finalUrl += (url.includes("?") ? "&" : "?") + q;
+    if (q) finalUrl += (finalUrl.includes("?") ? "&" : "?") + q;
   } else {
     opts.headers["Content-Type"] = "application/x-www-form-urlencoded";
     opts.body = new URLSearchParams(params).toString();
@@ -66,11 +80,11 @@ async function taskRequest(url, method = "GET", params = {}, cookie = null) {
 }
 
 async function procurement(action, params = {}) {
-  ensure("API_PROCUREMENT", API_PROCUREMENT);
-  ensure("API_KEY", API_KEY);
+  ensureBase();
+  if (!API_KEY) throw new Error("Thiếu env API_KEY");
 
   const body = new URLSearchParams({ key: API_KEY, action, ...params });
-  const res = await fetch(API_PROCUREMENT, {
+  const res = await fetch(url(PATHS.procurement), {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
@@ -90,21 +104,21 @@ async function procurement(action, params = {}) {
 // ========== TASK MODULE ==========
 async function doConfig(loai, id) {
   const cookie = await loginSession();
-  return taskRequest(API_CONFIG, "GET", { loai, id }, cookie);
+  return taskRequest(PATHS.config, "GET", { loai, id }, cookie);
 }
 
 async function doFetchTasks(type, nickchay = "") {
   const cookie = await loginSession();
   const params = { type };
   if (nickchay) params.nickchay = nickchay;
-  return taskRequest(API_TASKS, "GET", params, cookie);
+  return taskRequest(PATHS.tasks, "GET", params, cookie);
 }
 
 async function doClaim(ids, nickchay = "") {
   const cookie = await loginSession();
   const params = { id: Array.isArray(ids) ? ids.join(",") : String(ids) };
   if (nickchay) params.nickchay = nickchay;
-  return taskRequest(API_CLAIM, "POST", params, cookie);
+  return taskRequest(PATHS.claim, "POST", params, cookie);
 }
 
 // ========== PROCUREMENT MODULE ==========
@@ -148,4 +162,5 @@ module.exports = {
   doCancel,
   doBoost,
   loginSession,
+  PATHS,
 };
