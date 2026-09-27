@@ -11,6 +11,11 @@ import os, re, sys, json, time, random, threading, requests
 from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
+try:
+    from tiktok_actions import get_actor_for_account, do_task_action
+    HAS_TT = True
+except Exception:
+    HAS_TT = False
 
 # ═══════════════════════ CONFIG ═══════════════════════
 BASE_URL      = "https://tuongtaccheo.com"
@@ -333,33 +338,70 @@ def farm_one(sid, st: AccState, mode: str):
             time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
             continue
 
-        batch = tasks[:5]
+        batch = tasks[:3]
         idposts = []
+        done_tt = 0
+        actor = None
+        if HAS_TT:
+            try:
+                actor = get_actor_for_account({
+                    "id": st.id, "username": st.username,
+                    "sessionid": st.sessionid, "user_field": st.user_field,
+                })
+            except Exception as e:
+                with states_lock:
+                    st.msg = ("TT sess: " + str(e))[:40]
+
         for t in batch:
             idp = str(t.get("idpost") or t.get("id") or "")
             if not idp:
                 continue
-            idposts.append(idp)
             with states_lock:
                 st.target = str(t.get("link") or t.get("uid") or idp)[:22]
-                st.result = "đã lấy"
+                st.result = "dang TT"
+            if actor:
+                try:
+                    ar = do_task_action(actor, job_key, t)
+                    if ar.get("ok"):
+                        done_tt += 1
+                        with states_lock:
+                            st.result = "TT:" + str(ar.get("action", "ok"))
+                    else:
+                        with states_lock:
+                            st.result = "TT fail"
+                            st.msg = str(ar.get("error") or ar.get("raw", ""))[:36]
+                except Exception as e:
+                    with states_lock:
+                        st.result = "TT err"
+                        st.msg = str(e)[:36]
+            else:
+                with states_lock:
+                    st.result = "no TT sess"
+            idposts.append(idp)
+            time.sleep(random.uniform(1.5, 3.0))
+
+        if actor:
+            try:
+                actor.close()
+            except Exception:
+                pass
 
         if not idposts:
             st.miss += 1
             time.sleep(2)
             continue
 
-        time.sleep(random.uniform(1.2, 3.0))
+        time.sleep(random.uniform(1.0, 2.0))
         claim = claim_tasks(sid, job_key, nick_id, idposts)
-        result_txt = "đã làm"
+        result_txt = "done TT:%d/%d" % (done_tt, len(idposts))
         if isinstance(claim, dict) and claim.get("error"):
-            result_txt = "chờ đk"
+            result_txt = "cho dk claim"
             st.msg = str(claim.get("error"))[:36]
 
         with states_lock:
             st.done += len(idposts)
             st.result = result_txt
-            st.miss = 0
+            st.miss = 0 if done_tt > 0 else st.miss + 1
             global_done += len(idposts)
 
         time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
