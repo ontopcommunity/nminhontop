@@ -1,23 +1,18 @@
 /**
  * SMM / Task Execution + Procurement API helpers
  * API_BASE = https://tuongtaccheo.com
- * Paths lấy đúng từ tài liệu kỹ thuật
+ * Ưu tiên dùng PHPSESSID từ env, chỉ login lại khi cần
  */
 
 const API_BASE = (process.env.API_BASE || "").replace(/\/+$/, "");
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN || "";
 const API_KEY = process.env.API_KEY || "";
+const STORED_PHPSESSID = process.env.PHPSESSID || "";
 
-// ========== PATHS đúng theo tài liệu ==========
+// ========== PATHS (đã xác thực thực tế) ==========
 const PATHS = {
-  // Auth
-  login: "/auth/logintoken.php",
-
-  // Module Vận hành Nhiệm vụ
+  login: "/logintoken.php",                        // POST access_token → PHPSESSID + JSON
   profileSetup: "/api/profile-setup.php",          // loai, id
-  // Task fetch & claim có env_code động → xây trong hàm
-
-  // Module Cung ứng V2
   gateway: "/api/v2/gateway.php",                  // action=services|add|status|balance
 };
 
@@ -30,7 +25,15 @@ function url(path) {
   return API_BASE + path;
 }
 
-async function loginSession() {
+/**
+ * Ưu tiên dùng PHPSESSID đã lưu trong env.
+ * Nếu không có hoặc force=true thì login mới.
+ */
+async function loginSession(force = false) {
+  if (!force && STORED_PHPSESSID) {
+    return `PHPSESSID=${STORED_PHPSESSID}`;
+  }
+
   ensureBase();
   if (!ACCESS_TOKEN) throw new Error("Thiếu env ACCESS_TOKEN");
 
@@ -45,7 +48,6 @@ async function loginSession() {
     redirect: "manual",
   });
 
-  // Lấy PHPSESSID từ Set-Cookie
   const setCookie = res.headers.getSetCookie
     ? res.headers.getSetCookie().join(";")
     : res.headers.get("set-cookie") || "";
@@ -110,19 +112,13 @@ async function procurement(action, params = {}) {
 
 // ========== TASK MODULE ==========
 
-/** Thiết lập hồ sơ vận hành */
 async function doConfig(loai, id) {
   const cookie = await loginSession();
   return taskRequest(PATHS.profileSetup, "GET", { loai, id }, cookie);
 }
 
-/**
- * Lấy nhiệm vụ
- * env_code lấy từ loai (hoặc truyền riêng)
- * Path: /api/[env_code]/fetch-tasks.php
- */
 async function doFetchTasks(type, nickchay = "", envCode = "") {
-  if (!envCode) envCode = type; // fallback: dùng type làm env_code nếu không truyền
+  if (!envCode) envCode = type;
   const path = `/api/${envCode}/fetch-tasks.php`;
   const cookie = await loginSession();
   const params = { type };
@@ -130,10 +126,6 @@ async function doFetchTasks(type, nickchay = "", envCode = "") {
   return taskRequest(path, "GET", params, cookie);
 }
 
-/**
- * Báo cáo hoàn tất & nhận thưởng
- * Path: /api/[env_code]/report-completion.php
- */
 async function doClaim(ids, type = "", nickchay = "", envCode = "") {
   if (!envCode) envCode = type;
   const path = `/api/${envCode}/report-completion.php`;
@@ -146,7 +138,7 @@ async function doClaim(ids, type = "", nickchay = "", envCode = "") {
   return taskRequest(path, "POST", params, cookie);
 }
 
-// ========== PROCUREMENT MODULE (gateway.php) ==========
+// ========== PROCUREMENT MODULE ==========
 
 async function doServices() {
   return procurement("services");
@@ -169,7 +161,6 @@ async function doBalance() {
   return procurement("balance");
 }
 
-// Giữ lại cancel / boost nếu panel vẫn hỗ trợ (doc mới không liệt kê nhưng không hại)
 async function doCancel(order) {
   return procurement("cancel", { order });
 }

@@ -136,12 +136,14 @@ module.exports = async function handler(req, res) {
 
     // ========== TASK MODULE ==========
     // /login — kiểm tra session
-    if (lower === "/login" || lower === "login") {
+    if (lower === "/login" || lower === "login" || lower.startsWith("/login ")) {
+      const force = args[0] === "force" || args[0] === "new";
       let waitId = null;
       try {
-        waitId = await sendWaiting(chatId, "⏳ Đang login session...");
-        const cookie = await loginSession();
-        await sendMessage(chatId, `✅ Login OK\nCookie: ${cookie.slice(0, 40)}...`);
+        waitId = await sendWaiting(chatId, force ? "⏳ Force login mới..." : "⏳ Lấy session...");
+        const cookie = await loginSession(force);
+        const source = force ? "login mới" : (process.env.PHPSESSID ? "env PHPSESSID" : "login mới");
+        await sendMessage(chatId, `✅ Session OK (${source})\n${cookie}`);
       } catch (e) {
         await sendMessage(chatId, `✖ Login fail: ${e.message}`);
       } finally {
