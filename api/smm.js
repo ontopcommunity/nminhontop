@@ -13,7 +13,7 @@ const STORED_PHPSESSID = process.env.PHPSESSID || "";
 const PATHS = {
   login: "/logintoken.php",                        // POST access_token → PHPSESSID + JSON
   profileSetup: "/api/profile-setup.php",          // loai, id
-  gateway: "/api/v2/gateway.php",                  // action=services|add|status|balance
+  gateway: "/api/v2",                               // action=services|add|status|balance (đã test OK)
 };
 
 function ensureBase() {
@@ -41,7 +41,7 @@ async function loginSession(force = false) {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
-      "User-Agent": "OntopBot/1.0",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
       Accept: "application/json",
     },
     body: new URLSearchParams({ access_token: ACCESS_TOKEN }).toString(),
@@ -65,8 +65,10 @@ async function taskRequest(path, method = "GET", params = {}, cookie = null) {
   const opts = {
     method,
     headers: {
-      "User-Agent": "OntopBot/1.0",
-      Accept: "application/json",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      Accept: "application/json, text/plain, */*",
+      "X-Requested-With": "XMLHttpRequest",
+      Referer: API_BASE + "/",
     },
   };
   if (cookie) opts.headers.Cookie = cookie;
@@ -97,7 +99,7 @@ async function procurement(action, params = {}) {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
-      "User-Agent": "OntopBot/1.0",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
       Accept: "application/json",
     },
     body: body.toString(),
