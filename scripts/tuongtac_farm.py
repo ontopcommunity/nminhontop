@@ -339,7 +339,7 @@ def farm_one(sid, st: AccState, mode: str):
             continue
 
         batch = tasks[:3]
-        idposts = []
+        ok_ids = []   # chỉ claim job đã làm TT thành công
         done_tt = 0
         actor = None
         if HAS_TT:
@@ -359,26 +359,35 @@ def farm_one(sid, st: AccState, mode: str):
             with states_lock:
                 st.target = str(t.get("link") or t.get("uid") or idp)[:22]
                 st.result = "dang TT"
+
+            success = False
             if actor:
-                try:
-                    ar = do_task_action(actor, job_key, t)
-                    if ar.get("ok"):
-                        done_tt += 1
+                # tối đa 2 vòng / task
+                for attempt in range(2):
+                    try:
+                        ar = do_task_action(actor, job_key, t)
+                        if ar.get("ok"):
+                            success = True
+                            done_tt += 1
+                            with states_lock:
+                                st.result = "TT:" + str(ar.get("action", "ok"))
+                            break
+                        else:
+                            with states_lock:
+                                st.result = "TT retry" if attempt == 0 else "TT fail"
+                                st.msg = str(ar.get("error") or ar.get("raw", ""))[:36]
+                    except Exception as e:
                         with states_lock:
-                            st.result = "TT:" + str(ar.get("action", "ok"))
-                    else:
-                        with states_lock:
-                            st.result = "TT fail"
-                            st.msg = str(ar.get("error") or ar.get("raw", ""))[:36]
-                except Exception as e:
-                    with states_lock:
-                        st.result = "TT err"
-                        st.msg = str(e)[:36]
+                            st.result = "TT err"
+                            st.msg = str(e)[:36]
+                    time.sleep(1.5)
             else:
                 with states_lock:
                     st.result = "no TT sess"
-            idposts.append(idp)
-            time.sleep(random.uniform(1.5, 3.0))
+
+            if success:
+                ok_ids.append(idp)
+            time.sleep(random.uniform(1.2, 2.5))
 
         if actor:
             try:
@@ -386,23 +395,26 @@ def farm_one(sid, st: AccState, mode: str):
             except Exception:
                 pass
 
-        if not idposts:
-            st.miss += 1
-            time.sleep(2)
+        if not ok_ids:
+            with states_lock:
+                st.miss += 1
+                st.result = "0 ok"
+            time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
             continue
 
+        # Claim CHỈ những id đã làm TT thành công
         time.sleep(random.uniform(1.0, 2.0))
-        claim = claim_tasks(sid, job_key, nick_id, idposts)
-        result_txt = "done TT:%d/%d" % (done_tt, len(idposts))
+        claim = claim_tasks(sid, job_key, nick_id, ok_ids)
+        result_txt = "OK %d/%d" % (done_tt, len(batch))
         if isinstance(claim, dict) and claim.get("error"):
-            result_txt = "cho dk claim"
+            result_txt = "cho claim"
             st.msg = str(claim.get("error"))[:36]
 
         with states_lock:
-            st.done += len(idposts)
+            st.done += len(ok_ids)
             st.result = result_txt
-            st.miss = 0 if done_tt > 0 else st.miss + 1
-            global_done += len(idposts)
+            st.miss = 0
+            global_done += len(ok_ids)
 
         time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
 
