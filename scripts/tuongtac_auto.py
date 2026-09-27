@@ -21,6 +21,7 @@ import sys
 import json
 import time
 import re
+import random
 import requests
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -34,6 +35,7 @@ ACCESS_TOKEN   = "cfb194b9dbd24ab7789b762e9e65d0ef"
 DEFAULT_NICK   = "ontopmediamusic"
 
 SESSION_FILE   = Path(__file__).parent / "phpsessid.txt"
+NICKS_FILE     = Path(__file__).parent / "nicks.txt"
 CONFIG_FILE    = Path(__file__).parent / "config.json"
 FLARESOLVERR   = os.getenv("FLARESOLVERR_URL", "").rstrip("/")
 
@@ -281,6 +283,47 @@ def api_login(force=False):
     return sid
 
 
+
+def api_list_nicks(sid):
+    """Lấy danh sách nick đã cấu hình từ trang cauhinh + file local"""
+    nicks = set()
+    if NICKS_FILE.exists():
+        for line in NICKS_FILE.read_text().splitlines():
+            n = line.strip().lstrip("@")
+            if n and not n.startswith("#"):
+                nicks.add(n)
+    cookies = {"PHPSESSID": sid}
+    r = _request("GET", "/cauhinh/tiktok.php", {}, cookies)
+    if r and getattr(r, "text", None) and "Just a moment" not in r.text:
+        html = r.text
+        for m in re.findall(r"@([A-Za-z0-9._]{2,40})", html):
+            nicks.add(m)
+        for m in re.findall(r'data-(?:nick|username|id)=["\']([^"\']+)["\']', html, re.I):
+            if len(m) >= 2:
+                nicks.add(m.lstrip("@"))
+        for m in re.findall(r"\b(\d{10,25})\b", html):
+            nicks.add(m)
+    if not nicks and DEFAULT_NICK:
+        nicks.add(DEFAULT_NICK)
+    return sorted(nicks)
+
+
+def pick_random_nick(sid):
+    """Tự nhận 1 acc ngẫu nhiên đã cấu hình để cày"""
+    nicks = api_list_nicks(sid)
+    if not nicks:
+        UI.err("Không tìm thấy nick nào đã cấu hình")
+        return None
+    chosen = random.choice(nicks)
+    UI.ok(f"Danh sách nick ({len(nicks)}): {', '.join(list(nicks)[:8])}{'...' if len(nicks)>8 else ''}")
+    UI.ok(f"Random chọn acc: {chosen}")
+    cfg = load_config()
+    cfg["last_nick"] = chosen
+    cfg["nicks"] = nicks
+    save_config(cfg)
+    return chosen
+
+
 def api_get_tasks(sid, job_key="5", nick=DEFAULT_NICK):
     job = JOB_TYPES.get(job_key, JOB_TYPES["5"])
     path_suffix = job["path"]
@@ -374,9 +417,11 @@ def smart_wait(seconds, label="Chờ"):
 # ═══════════════════════════════════════════════════════════════
 #  FULL AUTO – đọc response để tự điều chỉnh
 # ═══════════════════════════════════════════════════════════════
-def full_auto(sid, nick=DEFAULT_NICK):
+def full_auto(sid, nick=None):
+    if not nick:
+        nick = pick_random_nick(sid) or DEFAULT_NICK
     UI.box_top("FULL AUTO")
-    UI.box_mid(f"Nick: {nick}")
+    UI.box_mid(f"Nick cày: {nick}")
     UI.box_mid(f"Bắt đầu: {datetime.now().strftime('%H:%M:%S')}")
     UI.box_bot()
     print()
@@ -426,8 +471,9 @@ def show_menu():
   │  1. Login / Làm mới session             │
   │  2. Lấy nhiệm vụ (chọn loại)            │
   │  3. Claim nhiệm vụ                      │
-  │  4. Full Auto (tất cả loại job)         │
-  │  5. Xem session & cấu hình              │
+  │  4. Full Auto (random acc đã cấu hình)  │
+  │  5. Xem session & danh sách nick        │
+  │  6. Random chọn acc cày                 │
   │  0. Thoát                               │
   └─────────────────────────────────────────┘{UI.R}
 """)
@@ -492,9 +538,20 @@ def main():
             UI.box_top("THÔNG TIN")
             UI.box_mid(f"PHPSESSID : {(sid or 'Chưa có')[:40]}")
             UI.box_mid(f"File      : {SESSION_FILE}")
-            UI.box_mid(f"Nick      : {DEFAULT_NICK}")
             UI.box_mid(f"Token     : {ACCESS_TOKEN[:16]}...")
             UI.box_bot()
+            if sid:
+                print()
+                nicks = api_list_nicks(sid)
+                UI.info(f"Nick đã cấu hình ({len(nicks)}):")
+                for n in nicks:
+                    print(f"      • {n}")
+        elif choice == "6":
+            if not sid:
+                sid = api_login()
+            if sid:
+                print()
+                pick_random_nick(sid)
 
         else:
             UI.warn("Lựa chọn không hợp lệ")

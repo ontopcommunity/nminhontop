@@ -1,0 +1,3 @@
+# Danh sách nick đã cấu hình – mỗi dòng 1 nick
+# Tool sẽ gộp với nick lấy từ trang cauhinh rồi random
+ontopmediamusic
