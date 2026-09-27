@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-╔══════════════════════════════════════════════════════════════╗
-║          TUONGTACCHEO AUTO WORKER - Cloud Shell Edition       ║
-║     Tự động login • Lưu PHPSESSID • Bypass Cloudflare         ║
-║     Path đúng theo tài liệu chính thức                        ║
-╚══════════════════════════════════════════════════════════════╝
+╔══════════════════════════════════════════════════════════════════════╗
+║                                                                      ║
+║              ████████╗████████╗ ██████╗                              ║
+║              ╚══██╔══╝╚══██╔══╝██╔════╝                              ║
+║                 ██║      ██║   ██║                                   ║
+║                 ██║      ██║   ██║                                   ║
+║                 ██║      ██║   ╚██████╗                              ║
+║                 ╚═╝      ╚═╝    ╚═════╝                              ║
+║                                                                      ║
+║         TUONGTACCHEO AUTO WORKER  •  Cloud Shell Edition             ║
+║         TikTok Job Engine  •  Auto Session  •  Smart Delay           ║
+║                                                                      ║
+╚══════════════════════════════════════════════════════════════════════╝
 """
 
 import os
@@ -14,66 +22,139 @@ import json
 import time
 import re
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
 
-# ======================== CẤU HÌNH ========================
-BASE_URL = "https://tuongtaccheo.com"
-ACCESS_TOKEN = "cfb194b9dbd24ab7789b762e9e65d0ef"
+# ═══════════════════════════════════════════════════════════════
+#  CẤU HÌNH
+# ═══════════════════════════════════════════════════════════════
+BASE_URL       = "https://tuongtaccheo.com"
+ACCESS_TOKEN   = "cfb194b9dbd24ab7789b762e9e65d0ef"
+DEFAULT_NICK   = "ontopmediamusic"
 
-SESSION_FILE = Path(__file__).parent / "phpsessid.txt"
-FLARESOLVERR_URL = os.getenv("FLARESOLVERR_URL", "").rstrip("/")
+SESSION_FILE   = Path(__file__).parent / "phpsessid.txt"
+CONFIG_FILE    = Path(__file__).parent / "config.json"
+FLARESOLVERR   = os.getenv("FLARESOLVERR_URL", "").rstrip("/")
 
-# ======================== MÀU SẮC ========================
-class C:
-    RESET = "\033[0m"
-    BOLD = "\033[1m"
-    GREEN = "\033[92m"
-    YELLOW = "\033[93m"
-    RED = "\033[91m"
-    CYAN = "\033[96m"
-    MAGENTA = "\033[95m"
-    GRAY = "\033[90m"
+# Delay giữa các request (giây) – tránh spam
+DELAY_BETWEEN  = 5
+# Delay mặc định khi API trả countdown
+DEFAULT_WAIT   = 60
+
+# Các loại nhiệm vụ (path đã test OK)
+JOB_TYPES = {
+    "1": {"name": "Sub Chéo",      "path": "subcheo"},
+    "2": {"name": "Sub VIP",       "path": "subcheovip"},
+    "3": {"name": "Tim (Like)",    "path": "timcheo"},
+    "4": {"name": "Comment",       "path": "cmtcheo"},
+    "5": {"name": "Tổng hợp",      "path": ""},  # getpost chung
+}
+
+# ═══════════════════════════════════════════════════════════════
+#  MÀU SẮC & GIAO DIỆN
+# ═══════════════════════════════════════════════════════════════
+class UI:
+    R  = "\033[0m"
+    B  = "\033[1m"
+    D  = "\033[2m"
+    G  = "\033[92m"
+    Y  = "\033[93m"
+    E  = "\033[91m"
+    C  = "\033[96m"
+    M  = "\033[95m"
+    W  = "\033[97m"
+    K  = "\033[90m"
+    BG = "\033[48;5;236m"
+
+    @staticmethod
+    def clear():
+        os.system("clear" if os.name != "nt" else "cls")
+
+    @staticmethod
+    def line(char="─", n=62):
+        return f"{UI.K}{char * n}{UI.R}"
+
+    @staticmethod
+    def box_top(title=""):
+        t = f" {title} " if title else ""
+        pad = 60 - len(title)
+        left = pad // 2
+        right = pad - left
+        print(f"{UI.C}{UI.B}╭{'─'*left}{t}{'─'*right}╮{UI.R}")
+
+    @staticmethod
+    def box_mid(text, color=None):
+        c = color or UI.W
+        print(f"{UI.C}│{UI.R} {c}{text:<58}{UI.R} {UI.C}│{UI.R}")
+
+    @staticmethod
+    def box_bot():
+        print(f"{UI.C}╰{'─'*60}╯{UI.R}")
+
+    @staticmethod
+    def ok(msg):   print(f"  {UI.G}✔{UI.R}  {msg}")
+    @staticmethod
+    def info(msg): print(f"  {UI.C}●{UI.R}  {msg}")
+    @staticmethod
+    def warn(msg): print(f"  {UI.Y}▲{UI.R}  {msg}")
+    @staticmethod
+    def err(msg):  print(f"  {UI.E}✘{UI.R}  {msg}")
+    @staticmethod
+    def wait(msg): print(f"  {UI.M}⏳{UI.R}  {msg}")
 
 def banner():
-    print(f"""{C.CYAN}{C.BOLD}
-╔══════════════════════════════════════════════════════════════╗
-║     ⚡  TUONGTACCHEO AUTO WORKER  ⚡                           ║
-║     Login • Chọn Nick • Lấy Nhiệm Vụ • Claim                 ║
-║     Tự động lưu PHPSESSID • Bypass Cloudflare                ║
-╚══════════════════════════════════════════════════════════════╝{C.RESET}
+    UI.clear()
+    print(f"""{UI.C}{UI.B}
+  ╔════════════════════════════════════════════════════════════╗
+  ║                                                            ║
+  ║          T U O N G T A C C H E O   W O R K E R             ║
+  ║                                                            ║
+  ║     TikTok Auto Job  •  Smart Session  •  Rate-Limit       ║
+  ║                                                            ║
+  ╚════════════════════════════════════════════════════════════╝{UI.R}
 """)
+    print(f"  {UI.K}Session : {SESSION_FILE}{UI.R}")
+    flare = FLARESOLVERR or "Không dùng"
+    print(f"  {UI.K}Flare   : {flare}{UI.R}")
+    print(f"  {UI.K}Nick    : {DEFAULT_NICK}{UI.R}")
+    print()
 
-def log_ok(msg):   print(f"{C.GREEN}[✓]{C.RESET} {msg}")
-def log_info(msg): print(f"{C.CYAN}[•]{C.RESET} {msg}")
-def log_warn(msg): print(f"{C.YELLOW}[!]{C.RESET} {msg}")
-def log_err(msg):  print(f"{C.RED}[✗]{C.RESET} {msg}")
-
-# ======================== SESSION ========================
+# ═══════════════════════════════════════════════════════════════
+#  SESSION
+# ═══════════════════════════════════════════════════════════════
 def load_session():
     if SESSION_FILE.exists():
         sid = SESSION_FILE.read_text().strip()
         if sid:
-            log_ok(f"Đã load PHPSESSID từ file: {sid[:18]}...")
             return sid
     return None
 
-def save_session(phpsessid: str):
-    SESSION_FILE.write_text(phpsessid)
-    log_ok(f"Đã lưu PHPSESSID → {SESSION_FILE}")
+def save_session(sid: str):
+    SESSION_FILE.write_text(sid)
+    UI.ok(f"Đã lưu PHPSESSID → {SESSION_FILE.name}")
 
-# ======================== REQUEST ENGINE ========================
-def get_flare_endpoint():
-    """Tránh bị /v1/v1"""
-    if not FLARESOLVERR_URL:
+def load_config():
+    if CONFIG_FILE.exists():
+        try:
+            return json.loads(CONFIG_FILE.read_text())
+        except:
+            pass
+    return {}
+
+def save_config(cfg: dict):
+    CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2))
+
+# ═══════════════════════════════════════════════════════════════
+#  REQUEST ENGINE
+# ═══════════════════════════════════════════════════════════════
+def _flare_endpoint():
+    if not FLARESOLVERR:
         return None
-    base = FLARESOLVERR_URL.rstrip("/")
-    if base.endswith("/v1"):
-        return base
-    return base + "/v1"
+    base = FLARESOLVERR.rstrip("/")
+    return base if base.endswith("/v1") else base + "/v1"
 
-def normal_request(method, path, params=None, cookies=None):
+def _request(method, path, params=None, cookies=None):
     url = BASE_URL + path
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -82,280 +163,316 @@ def normal_request(method, path, params=None, cookies=None):
         "Referer": BASE_URL + "/",
         "Origin": BASE_URL,
     }
-    try:
-        if method.upper() == "GET":
-            r = requests.get(url, params=params, headers=headers, cookies=cookies, timeout=30)
-        else:
-            r = requests.post(url, data=params, headers=headers, cookies=cookies, timeout=30)
-        return r
-    except Exception as e:
-        log_err(f"Request lỗi: {e}")
-        return None
 
-def flare_request(method, path, params=None, cookies=None):
-    endpoint = get_flare_endpoint()
-    if not endpoint:
-        return None
-
-    url = BASE_URL + path
-    if method.upper() == "GET" and params:
-        url += ("&" if "?" in url else "?") + urlencode(params)
-
-    payload = {
-        "cmd": "request.get" if method.upper() == "GET" else "request.post",
-        "url": url,
-        "maxTimeout": 60000,
-    }
-    if method.upper() == "POST" and params:
-        payload["postData"] = urlencode(params)
-
-    if cookies:
-        payload["cookies"] = [
-            {"name": k, "value": v, "domain": "tuongtaccheo.com"}
-            for k, v in cookies.items()
-        ]
-
-    try:
-        r = requests.post(endpoint, json=payload, timeout=70)
-        data = r.json()
-        if data.get("status") != "ok":
-            log_err(f"FlareSolverr: {data.get('message') or data}")
-            return None
-
-        sol = data.get("solution", {})
-
-        class FakeResp:
-            status_code = sol.get("status", 200)
-            text = sol.get("response", "")
-            def json(self_inner):
-                return json.loads(self_inner.text)
-        return FakeResp()
-    except Exception as e:
-        log_err(f"FlareSolverr lỗi: {e}")
-        return None
-
-def smart_request(method, path, params=None, cookies=None):
-    if FLARESOLVERR_URL:
-        log_info("Đi qua FlareSolverr (bypass CF)...")
-        r = flare_request(method, path, params, cookies)
-        if r and "Just a moment" not in (r.text or ""):
-            return r
-        log_warn("FlareSolverr thất bại hoặc vẫn bị CF → thử request thường")
-    return normal_request(method, path, params, cookies)
-
-# ======================== API FUNCTIONS ========================
-def login(force=False):
-    if not force:
-        old = load_session()
-        if old:
-            return old
-
-    log_info("Đang login lấy PHPSESSID mới...")
-    r = normal_request("POST", "/logintoken.php", {"access_token": ACCESS_TOKEN})
-    if not r:
-        return None
-
-    phpsessid = r.cookies.get("PHPSESSID")
-    if not phpsessid:
-        sc = r.headers.get("Set-Cookie", "")
-        m = re.search(r"PHPSESSID=([^;,\s]+)", sc, re.I)
-        if m:
-            phpsessid = m.group(1)
-
-    if phpsessid:
-        save_session(phpsessid)
+    # Thử FlareSolverr trước
+    ep = _flare_endpoint()
+    if ep:
         try:
+            full = url
+            if method == "GET" and params:
+                full += ("&" if "?" in full else "?") + urlencode(params)
+            payload = {
+                "cmd": "request.get" if method == "GET" else "request.post",
+                "url": full,
+                "maxTimeout": 60000,
+            }
+            if method == "POST" and params:
+                payload["postData"] = urlencode(params)
+            if cookies:
+                payload["cookies"] = [{"name": k, "value": v, "domain": "tuongtaccheo.com"} for k, v in cookies.items()]
+            r = requests.post(ep, json=payload, timeout=70)
             data = r.json()
-            if data.get("status") == "success":
-                u = data.get("data", {})
-                log_ok(f"Login thành công | User: {u.get('user')} | Số dư: {u.get('sodu')}")
-        except:
-            log_ok("Login thành công (có PHPSESSID)")
-        return phpsessid
-    else:
-        log_err(f"Login thất bại. Status={r.status_code} Body={r.text[:200]}")
+            if data.get("status") == "ok":
+                sol = data["solution"]
+                class R:
+                    status_code = sol.get("status", 200)
+                    text = sol.get("response", "")
+                    def json(self): return json.loads(self.text)
+                return R()
+        except Exception as e:
+            UI.warn(f"FlareSolverr lỗi: {e}")
+
+    # Request thường
+    try:
+        if method == "GET":
+            return requests.get(url, params=params, headers=headers, cookies=cookies, timeout=25)
+        return requests.post(url, data=params, headers=headers, cookies=cookies, timeout=25)
+    except Exception as e:
+        UI.err(f"Request lỗi: {e}")
         return None
 
-def chon_nick(phpsessid, nick="ontopmediamusic"):
-    """Đặt / chọn nickchay theo tài liệu"""
-    log_info(f"Đang chọn nick: {nick}...")
-    cookies = {"PHPSESSID": phpsessid}
+def parse_response(r):
+    """Đọc response thông minh – trả về dict chuẩn hóa"""
+    if r is None:
+        return {"ok": False, "error": "Không kết nối được", "countdown": 0, "raw": ""}
+    text = r.text or ""
+    if "Just a moment" in text or "cf-browser-verification" in text:
+        return {"ok": False, "error": "Cloudflare chặn", "countdown": 0, "raw": text[:100]}
 
-    # Các path có thể (theo tài liệu + thực tế)
-    paths = [
-        "/tiktok/kiemtien/chon_nick.php",
-        "/tiktok/kiemtien/datnick.php",
-        "/chon_nick.php",
-        "/api/chon_nick.php",
-    ]
+    # Số thuần (mã lỗi kiểu 7)
+    if text.strip().isdigit():
+        return {"ok": False, "error": f"Mã lỗi {text.strip()}", "countdown": 0, "raw": text.strip()}
 
-    for path in paths:
-        # Thử cả GET và POST
-        for method in ["GET", "POST"]:
-            params = {"nickchay": nick, "id": nick, "username": nick, "loai": "1"}
-            r = smart_request(method, path, params, cookies)
-            if not r:
-                continue
-            if "Just a moment" in r.text or "cf-browser-verification" in r.text:
-                log_warn(f"{method} {path} → Cloudflare")
-                continue
-            if r.status_code == 200:
-                try:
-                    data = r.json()
-                    log_ok(f"Chọn nick thành công via {method} {path}")
-                    print(json.dumps(data, ensure_ascii=False, indent=2)[:500])
-                    return data
-                except:
-                    if len(r.text) < 500 and ("success" in r.text.lower() or "ok" in r.text.lower() or "thành công" in r.text.lower()):
-                        log_ok(f"Chọn nick OK via {method} {path}")
-                        print(r.text[:300])
-                        return {"raw": r.text[:300]}
-                    log_info(f"{method} {path} → {r.text[:150]}")
-    log_err("Không chọn được nick")
-    return None
+    try:
+        data = r.json()
+    except:
+        return {"ok": False, "error": "Không phải JSON", "countdown": 0, "raw": text[:200]}
 
-def lay_nhiem_vu(phpsessid, nickchay="ontopmediamusic"):
-    """
-    Lấy nhiệm vụ - Path đúng theo tài liệu:
-    https://tuongtaccheo.com/tiktok/kiemtien/getpost.php?nickchay=...
-    """
-    log_info(f"Đang lấy nhiệm vụ nickchay={nickchay}...")
-    cookies = {"PHPSESSID": phpsessid}
+    # Chuẩn hóa các trường phổ biến từ API
+    result = {
+        "ok": True,
+        "error": data.get("error") or data.get("mess") or data.get("message") or "",
+        "countdown": int(data.get("countdown") or 0),
+        "sodu": data.get("sodu") or data.get("balance") or 0,
+        "data": data,
+        "raw": data,
+    }
+    if result["error"]:
+        result["ok"] = False
+    return result
 
-    # Path chính theo tài liệu ảnh
-    paths = [
-        "/tiktok/kiemtien/getpost.php",
-        "/tiktok/getpost.php",
-        "/getpost.php",
-        "/api/getpost.php",
-    ]
+# ═══════════════════════════════════════════════════════════════
+#  API FUNCTIONS
+# ═══════════════════════════════════════════════════════════════
+def api_login(force=False):
+    if not force:
+        sid = load_session()
+        if sid:
+            UI.ok(f"Dùng session cũ: {sid[:20]}...")
+            return sid
 
-    for path in paths:
-        r = smart_request("GET", path, {"nickchay": nickchay}, cookies)
-        if not r:
-            continue
-        if "Just a moment" in r.text or "cf-browser-verification" in r.text:
-            log_warn(f"{path} → Cloudflare")
-            continue
-        if r.status_code == 200:
-            try:
-                data = r.json()
-                log_ok(f"Lấy nhiệm vụ thành công via {path}")
-                if isinstance(data, list):
-                    print(f"{C.MAGENTA}→ Có {len(data)} nhiệm vụ{C.RESET}")
-                    for i, t in enumerate(data[:8], 1):
-                        print(f"  {i}. ID={t.get('id')} | {str(t.get('link', t.get('url', '')))[:70]}")
-                    if len(data) > 8:
-                        print(f"  ... và {len(data)-8} nhiệm vụ nữa")
-                else:
-                    print(json.dumps(data, ensure_ascii=False, indent=2)[:700])
-                return data
-            except:
-                log_info(f"{path}: {r.text[:300]}")
-                if r.text.strip().startswith("[") or r.text.strip().startswith("{"):
-                    print(r.text[:400])
-    log_err("Không lấy được nhiệm vụ")
-    return None
+    UI.info("Đang login...")
+    r = _request("POST", "/logintoken.php", {"access_token": ACCESS_TOKEN})
+    if not r:
+        UI.err("Login thất bại – không kết nối")
+        return None
 
-def claim(phpsessid, ids, nickchay="ontopmediamusic"):
-    """
-    Nhận xu / claim - theo tài liệu:
-    thêm trường nickchay vào body
-    ví dụ: id=123,345,456&nickchay=67462381249
-    """
+    sid = r.cookies.get("PHPSESSID")
+    if not sid:
+        m = re.search(r"PHPSESSID=([^;,\s]+)", r.headers.get("Set-Cookie", ""), re.I)
+        if m:
+            sid = m.group(1)
+
+    if not sid:
+        UI.err(f"Không lấy được PHPSESSID | {r.text[:150]}")
+        return None
+
+    save_session(sid)
+    parsed = parse_response(r)
+    if parsed.get("data", {}).get("status") == "success" or "success" in str(parsed.get("raw", "")):
+        d = parsed.get("data", {}).get("data", {})
+        UI.ok(f"Login OK | User: {d.get('user', '?')} | Số dư: {d.get('sodu', '?')}")
+    else:
+        UI.ok("Login OK (có PHPSESSID)")
+    return sid
+
+
+def api_get_tasks(sid, job_key="5", nick=DEFAULT_NICK):
+    job = JOB_TYPES.get(job_key, JOB_TYPES["5"])
+    path_suffix = job["path"]
+    if path_suffix:
+        path = f"/tiktok/kiemtien/{path_suffix}/getpost.php"
+    else:
+        path = "/tiktok/kiemtien/getpost.php"
+
+    UI.info(f"Lấy nhiệm vụ [{job['name']}] → {path}")
+    cookies = {"PHPSESSID": sid}
+    r = _request("GET", path, {"nickchay": nick}, cookies)
+    result = parse_response(r)
+
+    if result["countdown"] > 0:
+        UI.warn(f"{result['error']} (chờ {result['countdown']}s)")
+    elif not result["ok"]:
+        UI.err(result["error"] or "Lỗi không xác định")
+        if result["raw"] and not isinstance(result["raw"], dict):
+            print(f"      {UI.K}{str(result['raw'])[:120]}{UI.R}")
+    else:
+        data = result["data"]
+        if isinstance(data, list):
+            UI.ok(f"Có {len(data)} nhiệm vụ")
+            for i, t in enumerate(data[:6], 1):
+                tid = t.get("id", "?")
+                link = str(t.get("link") or t.get("url") or "")[:55]
+                print(f"      {UI.W}{i}. ID={tid}  {UI.K}{link}{UI.R}")
+            if len(data) > 6:
+                print(f"      {UI.K}... +{len(data)-6} nhiệm vụ nữa{UI.R}")
+        else:
+            UI.ok("Response:")
+            print(f"      {json.dumps(data, ensure_ascii=False)[:200]}")
+    return result
+
+
+def api_claim(sid, ids, job_key="5", nick=DEFAULT_NICK):
     if isinstance(ids, list):
         ids = ",".join(str(x) for x in ids)
-    log_info(f"Đang claim id={ids} nickchay={nickchay}...")
-    cookies = {"PHPSESSID": phpsessid}
+    job = JOB_TYPES.get(job_key, JOB_TYPES["5"])
+    path_suffix = job["path"]
+    if path_suffix:
+        path = f"/tiktok/kiemtien/{path_suffix}/nhantien.php"
+    else:
+        path = "/tiktok/kiemtien/nhantien.php"
 
-    paths = [
-        "/tiktok/kiemtien/nhantien.php",
-        "/tiktok/kiemtien/claim.php",
-        "/nhantien.php",
-        "/api/nhantien.php",
-    ]
-    params = {"id": ids, "nickchay": nickchay}
+    UI.info(f"Claim [{job['name']}] ids={ids}")
+    cookies = {"PHPSESSID": sid}
+    r = _request("POST", path, {"id": ids, "nickchay": nick}, cookies)
+    result = parse_response(r)
 
-    for path in paths:
-        r = smart_request("POST", path, params, cookies)
-        if not r:
-            continue
-        if "Just a moment" in r.text:
-            continue
-        try:
-            data = r.json()
-            log_ok(f"Claim thành công via {path}")
-            print(json.dumps(data, ensure_ascii=False, indent=2)[:500])
-            return data
-        except:
-            log_info(f"{path}: {r.text[:250]}")
-    log_err("Claim thất bại")
-    return None
+    if result["countdown"] > 0:
+        UI.warn(f"{result['error']} (chờ {result['countdown']}s)")
+    elif not result["ok"]:
+        UI.err(result["error"] or "Claim lỗi")
+    else:
+        UI.ok(f"Claim thành công | Số dư: {result.get('sodu', '?')}")
+        print(f"      {json.dumps(result['data'], ensure_ascii=False)[:200]}")
+    return result
 
-# ======================== MENU ========================
-def menu():
+
+def smart_wait(seconds, label="Chờ"):
+    """Đếm ngược đẹp"""
+    seconds = max(1, int(seconds))
+    for left in range(seconds, 0, -1):
+        mins, secs = divmod(left, 60)
+        bar_len = 30
+        filled = int(bar_len * (seconds - left) / seconds)
+        bar = "█" * filled + "░" * (bar_len - filled)
+        print(f"\r  {UI.M}⏳{UI.R}  {label}: {mins:02d}:{secs:02d}  {UI.C}{bar}{UI.R}  ", end="", flush=True)
+        time.sleep(1)
+    print(f"\r  {UI.G}✔{UI.R}  {label}: xong{' ' * 40}")
+
+
+# ═══════════════════════════════════════════════════════════════
+#  FULL AUTO – đọc response để tự điều chỉnh
+# ═══════════════════════════════════════════════════════════════
+def full_auto(sid, nick=DEFAULT_NICK):
+    UI.box_top("FULL AUTO")
+    UI.box_mid(f"Nick: {nick}")
+    UI.box_mid(f"Bắt đầu: {datetime.now().strftime('%H:%M:%S')}")
+    UI.box_bot()
+    print()
+
+    total_tasks = 0
+    for key, job in JOB_TYPES.items():
+        print(f"\n  {UI.B}{UI.C}▸ {job['name']}{UI.R}")
+        print(f"  {UI.line('·')}")
+
+        result = api_get_tasks(sid, key, nick)
+
+        # Tự đọc countdown từ API và chờ
+        if result["countdown"] > 0:
+            wait_sec = min(result["countdown"] + 2, 180)  # tối đa 3 phút
+            smart_wait(wait_sec, f"Rate-limit {job['name']}")
+            # Thử lại 1 lần sau khi chờ
+            result = api_get_tasks(sid, key, nick)
+
+        if result["ok"] and isinstance(result.get("data"), list):
+            tasks = result["data"]
+            total_tasks += len(tasks)
+            # Có nhiệm vụ → có thể claim (tùy chọn, hiện chỉ log)
+            # ids = [t["id"] for t in tasks if "id" in t]
+            # if ids:
+            #     time.sleep(DELAY_BETWEEN)
+            #     api_claim(sid, ids[:5], key, nick)
+
+        # Delay giữa các loại job
+        if key != list(JOB_TYPES.keys())[-1]:
+            smart_wait(DELAY_BETWEEN, "Nghỉ giữa các job")
+
+    print()
+    UI.box_top("KẾT QUẢ")
+    UI.box_mid(f"Tổng nhiệm vụ lấy được: {total_tasks}")
+    UI.box_mid(f"Kết thúc: {datetime.now().strftime('%H:%M:%S')}")
+    UI.box_bot()
+
+
+# ═══════════════════════════════════════════════════════════════
+#  MENU
+# ═══════════════════════════════════════════════════════════════
+def show_menu():
     print(f"""
-{C.BOLD}┌─────────── MENU ───────────┐
-│  1. Login / Làm mới session │
-│  2. Chọn nick (ontopmediamusic) │
-│  3. Lấy nhiệm vụ            │
-│  4. Chạy full auto (1→2→3)  │
-│  5. Xem PHPSESSID hiện tại  │
-│  0. Thoát                   │
-└─────────────────────────────┘{C.RESET}
+  {UI.C}{UI.B}┌─────────────────────────────────────────┐
+  │           M E N U   C H Í N H           │
+  ├─────────────────────────────────────────┤
+  │  1. Login / Làm mới session             │
+  │  2. Lấy nhiệm vụ (chọn loại)            │
+  │  3. Claim nhiệm vụ                      │
+  │  4. Full Auto (tất cả loại job)         │
+  │  5. Xem session & cấu hình              │
+  │  0. Thoát                               │
+  └─────────────────────────────────────────┘{UI.R}
 """)
+
+def choose_job():
+    print(f"\n  {UI.B}Chọn loại nhiệm vụ:{UI.R}")
+    for k, v in JOB_TYPES.items():
+        print(f"    {UI.C}{k}.{UI.R} {v['name']}")
+    c = input(f"\n  {UI.Y}› {UI.R}").strip()
+    return c if c in JOB_TYPES else "5"
+
 
 def main():
     banner()
-    print(f"{C.GRAY}Session file : {SESSION_FILE}{C.RESET}")
-    flare_ep = get_flare_endpoint()
-    print(f"{C.GRAY}FlareSolverr : {flare_ep or 'Chưa cấu hình'}{C.RESET}")
-    print()
-
-    phpsessid = load_session()
+    sid = load_session()
+    if sid:
+        UI.ok(f"Session sẵn có: {sid[:22]}...")
+    else:
+        UI.warn("Chưa có session – hãy login trước")
 
     while True:
-        menu()
-        choice = input(f"{C.YELLOW}Chọn chức năng › {C.RESET}").strip()
+        show_menu()
+        choice = input(f"  {UI.Y}Chọn chức năng › {UI.R}").strip()
 
         if choice == "0":
-            log_info("Bye!")
+            print(f"\n  {UI.C}Tạm biệt!{UI.R}\n")
             break
+
         elif choice == "1":
-            phpsessid = login(force=True)
+            print()
+            sid = api_login(force=True)
+
         elif choice == "2":
-            if not phpsessid:
-                phpsessid = login()
-            if phpsessid:
-                chon_nick(phpsessid)
+            if not sid:
+                sid = api_login()
+            if sid:
+                print()
+                job = choose_job()
+                print()
+                api_get_tasks(sid, job)
+
         elif choice == "3":
-            if not phpsessid:
-                phpsessid = login()
-            if phpsessid:
-                lay_nhiem_vu(phpsessid)
+            if not sid:
+                sid = api_login()
+            if sid:
+                print()
+                job = choose_job()
+                ids = input(f"  {UI.Y}Nhập ID nhiệm vụ (cách nhau dấu phẩy) › {UI.R}").strip()
+                if ids:
+                    print()
+                    api_claim(sid, ids, job)
+
         elif choice == "4":
-            log_info(f"{datetime.now().strftime('%H:%M:%S')} Bắt đầu full auto...")
-            phpsessid = login(force=False) or login(force=True)
-            if not phpsessid:
-                log_err("Không login được → dừng")
-                continue
-            chon_nick(phpsessid)
-            time.sleep(1.2)
-            tasks = lay_nhiem_vu(phpsessid)
-            if tasks and isinstance(tasks, list) and len(tasks) > 0:
-                log_ok(f"Full auto xong – có {len(tasks)} nhiệm vụ")
-            else:
-                log_warn("Không có nhiệm vụ")
+            if not sid:
+                sid = api_login()
+            if sid:
+                print()
+                full_auto(sid)
+
         elif choice == "5":
-            print(f"PHPSESSID = {phpsessid or 'Chưa có'}")
-            if SESSION_FILE.exists():
-                print(f"File     = {SESSION_FILE.read_text().strip()}")
+            print()
+            UI.box_top("THÔNG TIN")
+            UI.box_mid(f"PHPSESSID : {(sid or 'Chưa có')[:40]}")
+            UI.box_mid(f"File      : {SESSION_FILE}")
+            UI.box_mid(f"Nick      : {DEFAULT_NICK}")
+            UI.box_mid(f"Token     : {ACCESS_TOKEN[:16]}...")
+            UI.box_bot()
+
         else:
-            log_warn("Lựa chọn không hợp lệ")
+            UI.warn("Lựa chọn không hợp lệ")
+
         print()
+
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print(f"\n{C.YELLOW}Đã dừng bởi người dùng.{C.RESET}")
+        print(f"\n\n  {UI.Y}Đã dừng.{UI.R}\n")
