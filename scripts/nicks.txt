@@ -1,3 +1,3 @@
-# Danh sách nick đã cấu hình – mỗi dòng 1 nick
-# Tool sẽ gộp với nick lấy từ trang cauhinh rồi random
-ontopmediamusic
+# Format: username  HOẶC  id|username
+# API bắt buộc nickchay = ID số (lấy từ trang cấu hình)
+7342047969309328392|ontopmediamusic

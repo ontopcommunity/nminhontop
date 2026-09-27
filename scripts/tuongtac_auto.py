@@ -285,43 +285,72 @@ def api_login(force=False):
 
 
 def api_list_nicks(sid):
-    """Lấy danh sách nick đã cấu hình từ trang cauhinh + file local"""
-    nicks = set()
-    if NICKS_FILE.exists():
-        for line in NICKS_FILE.read_text().splitlines():
-            n = line.strip().lstrip("@")
-            if n and not n.startswith("#"):
-                nicks.add(n)
+    """
+    Lấy nick đã cấu hình.
+    Trả về: [{"id": "7342...", "username": "ontopmediamusic"}, ...]
+    API bắt buộc nickchay = ID số.
+    """
+    accounts = []
+    seen = set()
     cookies = {"PHPSESSID": sid}
     r = _request("GET", "/cauhinh/tiktok.php", {}, cookies)
-    if r and getattr(r, "text", None) and "Just a moment" not in r.text:
+    if r and getattr(r, "text", None) and "Just a moment" not in (r.text or ""):
         html = r.text
-        for m in re.findall(r"@([A-Za-z0-9._]{2,40})", html):
-            nicks.add(m)
-        for m in re.findall(r'data-(?:nick|username|id)=["\']([^"\']+)["\']', html, re.I):
-            if len(m) >= 2:
-                nicks.add(m.lstrip("@"))
-        for m in re.findall(r"\b(\d{10,25})\b", html):
-            nicks.add(m)
-    if not nicks and DEFAULT_NICK:
-        nicks.add(DEFAULT_NICK)
-    return sorted(nicks)
+        # value="7342047969309328392" ... ontopmediamusic
+        pat = r"value=[\'\"](\d{10,25})[\'\"][^>]*>.*?([A-Za-z0-9._]{2,40})"
+        for m in re.finditer(pat, html, re.I | re.S):
+            uid, uname = m.group(1), m.group(2)
+            if uname.lower() in ("checkbox", "input", "label", "img", "span", "div", "li", "ul"):
+                continue
+            if uid not in seen:
+                seen.add(uid)
+                accounts.append({"id": uid, "username": uname})
+        if not accounts:
+            ids = re.findall(r"value=[\'\"](\d{10,25})[\'\"]", html)
+            users = re.findall(r"@([A-Za-z0-9._]{2,40})", html)
+            for i, uid in enumerate(ids):
+                uname = users[i] if i < len(users) else uid
+                if uid not in seen:
+                    seen.add(uid)
+                    accounts.append({"id": uid, "username": uname})
+
+    if NICKS_FILE.exists():
+        for line in NICKS_FILE.read_text().splitlines():
+            line = line.strip().lstrip("@")
+            if not line or line.startswith("#"):
+                continue
+            if "|" in line:
+                uid, uname = [x.strip() for x in line.split("|", 1)]
+            elif line.isdigit() and len(line) >= 10:
+                uid, uname = line, line
+            else:
+                found = next((x for x in accounts if x["username"] == line), None)
+                if found:
+                    continue
+                uid, uname = line, line
+            if uid not in seen:
+                seen.add(uid)
+                accounts.append({"id": uid, "username": uname})
+
+    if not accounts and DEFAULT_NICK:
+        accounts.append({"id": DEFAULT_NICK, "username": DEFAULT_NICK})
+    return accounts
 
 
 def pick_random_nick(sid):
-    """Tự nhận 1 acc ngẫu nhiên đã cấu hình để cày"""
-    nicks = api_list_nicks(sid)
-    if not nicks:
+    """Tự nhận 1 acc ngẫu nhiên – trả về ID số (nickchay)"""
+    accounts = api_list_nicks(sid)
+    if not accounts:
         UI.err("Không tìm thấy nick nào đã cấu hình")
         return None
-    chosen = random.choice(nicks)
-    UI.ok(f"Danh sách nick ({len(nicks)}): {', '.join(list(nicks)[:8])}{'...' if len(nicks)>8 else ''}")
-    UI.ok(f"Random chọn acc: {chosen}")
+    chosen = random.choice(accounts)
+    UI.ok("Có %d acc: %s" % (len(accounts), ", ".join("%s(%s…)" % (a["username"], a["id"][:8]) for a in accounts[:5])))
+    UI.ok("Random chọn: %s | nickchay=%s" % (chosen["username"], chosen["id"]))
     cfg = load_config()
     cfg["last_nick"] = chosen
-    cfg["nicks"] = nicks
+    cfg["accounts"] = accounts
     save_config(cfg)
-    return chosen
+    return chosen["id"]
 
 
 def api_get_tasks(sid, job_key="5", nick=DEFAULT_NICK):
@@ -357,9 +386,15 @@ def api_get_tasks(sid, job_key="5", nick=DEFAULT_NICK):
         if isinstance(data, list):
             UI.ok(f"Có {len(data)} nhiệm vụ")
             for i, t in enumerate(data[:6], 1):
-                tid = t.get("id", "?")
-                link = str(t.get("link") or t.get("url") or "")[:55]
-                print(f"      {UI.W}{i}. ID={tid}  {UI.K}{link}{UI.R}")
+                # API trả idpost (không phải id)
+                tid = t.get("idpost") or t.get("id") or "?"
+                link = str(t.get("link") or t.get("url") or "")[:50]
+                extra = ""
+                if t.get("uid"):
+                    extra = f" uid={t['uid']}"
+                if t.get("nd"):
+                    extra = f" cmt={str(t['nd'])[:40]}"
+                print(f"      {UI.W}{i}. idpost={tid[:22]}…  {UI.K}{link}{extra}{UI.R}")
             if len(data) > 6:
                 print(f"      {UI.K}... +{len(data)-6} nhiệm vụ nữa{UI.R}")
         else:
@@ -378,9 +413,10 @@ def api_claim(sid, ids, job_key="5", nick=DEFAULT_NICK):
     else:
         path = "/tiktok/kiemtien/nhantien.php"
 
-    UI.info(f"Claim [{job['name']}] ids={ids}")
+    UI.info(f"Claim [{job['name']}] idpost={ids}")
     cookies = {"PHPSESSID": sid}
-    r = _request("POST", path, {"id": ids, "nickchay": nick}, cookies)
+    # API nhận field id = danh sách idpost
+    r = _request("POST", path, {"id": ids, "idpost": ids, "nickchay": nick}, cookies)
     result = parse_response(r)
     if result.get("need_relogin") or result.get("raw") == "7":
         UI.warn("Gặp mã 7 → tự login lại session...")
@@ -542,10 +578,13 @@ def main():
             UI.box_bot()
             if sid:
                 print()
-                nicks = api_list_nicks(sid)
-                UI.info(f"Nick đã cấu hình ({len(nicks)}):")
-                for n in nicks:
-                    print(f"      • {n}")
+                accounts = api_list_nicks(sid)
+                UI.info(f"Nick đã cấu hình ({len(accounts)}):")
+                for a in accounts:
+                    if isinstance(a, dict):
+                        print(f"      • {a.get('username')}  →  nickchay={a.get('id')}")
+                    else:
+                        print(f"      • {a}")
         elif choice == "6":
             if not sid:
                 sid = api_login()
