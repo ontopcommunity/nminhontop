@@ -390,9 +390,10 @@ module.exports = async function handler(req, res) {
           "/cancel order\n" +
           "/boost order\n\n" +
           "Env cần set trên Vercel:\n" +
-          "API_BASE   (1 link duy nhất)\n" +
-          "ACCESS_TOKEN\n" +
-          "API_KEY\n" +
+          "API_BASE\n" +
+          "ACCESS_TOKEN + API_KEY\n" +
+          "PHPSESSID (optional)\n" +
+          "FLARESOLVERR_URL (bypass CF)\n" +
           "━━━━━━━━━━━━━━━━"
       );
     } else if (lower === "/keyboard") {
