@@ -154,8 +154,16 @@ def _flare_endpoint():
     base = FLARESOLVERR.rstrip("/")
     return base if base.endswith("/v1") else base + "/v1"
 
-def _request(method, path, params=None, cookies=None):
+def _request(method, path, params=None, cookies=None, use_token=True):
     url = BASE_URL + path
+    params = dict(params or {})
+    # Gửi access_token như key trong mọi request
+    if use_token and ACCESS_TOKEN and "access_token" not in params:
+        params["access_token"] = ACCESS_TOKEN
+    # Gửi kèm phpsessid qua query/body nếu có cookie
+    if cookies and cookies.get("PHPSESSID") and "phpsessid" not in params:
+        params["phpsessid"] = cookies["PHPSESSID"]
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "application/json, text/javascript, */*; q=0.01",
