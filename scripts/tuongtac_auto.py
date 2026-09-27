@@ -154,15 +154,13 @@ def _flare_endpoint():
     base = FLARESOLVERR.rstrip("/")
     return base if base.endswith("/v1") else base + "/v1"
 
-def _request(method, path, params=None, cookies=None, use_token=True):
+def _request(method, path, params=None, cookies=None, use_token=False):
+    """use_token=True chỉ dùng cho login. Job API bắt buộc Cookie PHPSESSID."""
     url = BASE_URL + path
     params = dict(params or {})
-    # Gửi access_token như key trong mọi request
+    # Chỉ gắn access_token khi được yêu cầu (login)
     if use_token and ACCESS_TOKEN and "access_token" not in params:
         params["access_token"] = ACCESS_TOKEN
-    # Gửi kèm phpsessid qua query/body nếu có cookie
-    if cookies and cookies.get("PHPSESSID") and "phpsessid" not in params:
-        params["phpsessid"] = cookies["PHPSESSID"]
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -171,6 +169,10 @@ def _request(method, path, params=None, cookies=None, use_token=True):
         "Referer": BASE_URL + "/",
         "Origin": BASE_URL,
     }
+    # Bắt buộc có cookie khi gọi job API
+    if not use_token and (not cookies or not cookies.get("PHPSESSID")):
+        UI.err("Thiếu PHPSESSID cookie – phải login trước")
+        return None
 
     # Thử FlareSolverr trước
     ep = _flare_endpoint()
@@ -217,9 +219,13 @@ def parse_response(r):
     if "Just a moment" in text or "cf-browser-verification" in text:
         return {"ok": False, "error": "Cloudflare chặn", "countdown": 0, "raw": text[:100]}
 
-    # Số thuần (mã lỗi kiểu 7)
+    # Số thuần (mã lỗi kiểu 7 = thiếu session/cookie)
     if text.strip().isdigit():
-        return {"ok": False, "error": f"Mã lỗi {text.strip()}", "countdown": 0, "raw": text.strip()}
+        code = text.strip()
+        msg = {
+            "7": "Mã 7 – thiếu PHPSESSID cookie hoặc session hết hạn (cần login lại)",
+        }.get(code, f"Mã lỗi {code}")
+        return {"ok": False, "error": msg, "countdown": 0, "raw": code, "need_relogin": code == "7"}
 
     try:
         data = r.json()
@@ -250,7 +256,7 @@ def api_login(force=False):
             return sid
 
     UI.info("Đang login...")
-    r = _request("POST", "/logintoken.php", {"access_token": ACCESS_TOKEN})
+    r = _request("POST", "/logintoken.php", {"access_token": ACCESS_TOKEN}, use_token=True)
     if not r:
         UI.err("Login thất bại – không kết nối")
         return None
@@ -287,6 +293,15 @@ def api_get_tasks(sid, job_key="5", nick=DEFAULT_NICK):
     cookies = {"PHPSESSID": sid}
     r = _request("GET", path, {"nickchay": nick}, cookies)
     result = parse_response(r)
+    # Tự relogin nếu bị mã 7
+    if result.get("need_relogin") or result.get("raw") == "7":
+        UI.warn("Gặp mã 7 → tự login lại session...")
+        new_sid = api_login(force=True)
+        if new_sid:
+            sid = new_sid
+            cookies = {"PHPSESSID": sid}
+            r = _request("GET", path, {"nickchay": nick}, cookies)
+            result = parse_response(r)
 
     if result["countdown"] > 0:
         UI.warn(f"{result['error']} (chờ {result['countdown']}s)")
@@ -324,6 +339,14 @@ def api_claim(sid, ids, job_key="5", nick=DEFAULT_NICK):
     cookies = {"PHPSESSID": sid}
     r = _request("POST", path, {"id": ids, "nickchay": nick}, cookies)
     result = parse_response(r)
+    if result.get("need_relogin") or result.get("raw") == "7":
+        UI.warn("Gặp mã 7 → tự login lại session...")
+        new_sid = api_login(force=True)
+        if new_sid:
+            sid = new_sid
+            cookies = {"PHPSESSID": sid}
+            r = _request("POST", path, {"id": ids, "nickchay": nick}, cookies)
+            result = parse_response(r)
 
     if result["countdown"] > 0:
         UI.warn(f"{result['error']} (chờ {result['countdown']}s)")
