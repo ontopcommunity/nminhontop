@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ONTOP TikTok Actor – ổn định tối đa
-- Follow: API + csrf (đã verify status_code=0)
-- Like/Comment: API → retry → UI fallback
-- Chỉ trả ok=True khi chắc chắn thành công
+ONTOP TikTok Actor v2
+Chrome + session cookie + secsdk CSRF
+Follow/Like/Comment + UI fallback + login_expired detect
 """
 
 import re
@@ -17,27 +16,26 @@ from urllib.parse import quote
 
 SCRIPT_DIR = Path(__file__).parent
 FULL_JSON = SCRIPT_DIR / "tiktok_full.json"
-
 _lock = threading.Lock()
-_cookie_map = None
+_map = None
 
-# ───────── helpers ─────────
-def _load_map():
-    global _cookie_map
-    if _cookie_map is not None:
-        return _cookie_map
-    _cookie_map = {}
+
+def _load():
+    global _map
+    if _map is not None:
+        return _map
+    _map = {}
     if FULL_JSON.exists():
         for a in json.loads(FULL_JSON.read_text()):
             for k in (a.get("tt_uid"), a.get("sessionid"), a.get("username"), a.get("user_field")):
                 if k:
-                    _cookie_map[str(k)] = a
-    return _cookie_map
+                    _map[str(k)] = a
+    return _map
 
 
-def _cookie_list(cookies_str):
+def _cookies(s):
     out = []
-    for part in cookies_str.split(";"):
+    for part in s.split(";"):
         part = part.strip()
         if "=" not in part:
             continue
@@ -46,47 +44,48 @@ def _cookie_list(cookies_str):
     return out
 
 
-def _ok_json(body: str) -> bool:
-    if not body or "Argus" in body or "blocked" in body.lower():
-        return False
+def _parse_ok(body: str):
+    if not body:
+        return False, "empty"
+    if "Argus" in body or "blocked" in body.lower():
+        return False, "argus_block"
     try:
         data = json.loads(body)
     except Exception:
-        return False
+        return False, "not_json"
     sc = data.get("status_code")
+    msg = str(data.get("status_msg") or "")
     if sc in (0, "0"):
-        return True
-    # already following / already liked
+        return True, "ok"
+    if sc in (8, "8") or "expired" in msg.lower():
+        return False, "login_expired"
+    if sc in (10402, "10402") or "csrf" in msg.lower():
+        return False, "bad_csrf"
     if data.get("follow_status") in (1, 2):
-        return True
+        return True, "already_following"
     if data.get("is_digg") in (1, True):
-        return True
-    # duplicate / already done messages often still ok for farming
-    msg = str(data.get("status_msg") or "").lower()
-    if any(x in msg for x in ("already", "đang follow", "followed")):
-        return True
-    return False
+        return True, "already_liked"
+    return False, "code=%s:%s" % (sc, msg[:40])
 
 
-def _make_driver():
+def _driver():
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
-    opts = Options()
-    opts.add_argument("--headless=new")
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-dev-shm-usage")
-    opts.add_argument("--disable-gpu")
-    opts.add_argument("--window-size=1365,900")
-    opts.add_argument("--lang=en-US")
-    opts.add_argument("--disable-blink-features=AutomationControlled")
-    opts.add_experimental_option("excludeSwitches", ["enable-automation"])
-    opts.add_experimental_option("useAutomationExtension", False)
-    opts.binary_location = "/usr/bin/google-chrome"
-    d = webdriver.Chrome(options=opts)
+    o = Options()
+    o.add_argument("--headless=new")
+    o.add_argument("--no-sandbox")
+    o.add_argument("--disable-dev-shm-usage")
+    o.add_argument("--disable-gpu")
+    o.add_argument("--window-size=1365,900")
+    o.add_argument("--disable-blink-features=AutomationControlled")
+    o.add_experimental_option("excludeSwitches", ["enable-automation"])
+    o.add_experimental_option("useAutomationExtension", False)
+    o.binary_location = "/usr/bin/google-chrome"
+    d = webdriver.Chrome(options=o)
     d.set_page_load_timeout(50)
     try:
         d.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-            "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+            "source": "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})"
         })
     except Exception:
         pass
@@ -97,10 +96,11 @@ class TikTokActor:
     def __init__(self, cookies_str: str):
         self.cookies_str = cookies_str
         self.driver = None
+        self.login_ok = None
 
     def start(self):
         with _lock:
-            self.driver = _make_driver()
+            self.driver = _driver()
             self._boot()
         return self
 
@@ -115,235 +115,219 @@ class TikTokActor:
     def _boot(self):
         d = self.driver
         d.get("https://www.tiktok.com/")
-        time.sleep(1.0 + random.random())
-        for c in _cookie_list(self.cookies_str):
+        time.sleep(1.0)
+        for c in _cookies(self.cookies_str):
             try:
                 d.add_cookie(c)
             except Exception:
                 pass
         d.get("https://www.tiktok.com/foryou")
-        time.sleep(2.0 + random.random())
+        time.sleep(3.5 + random.random())
 
-    def _refresh_session(self):
+    def _refresh(self):
         try:
             self.driver.get("https://www.tiktok.com/foryou")
-            time.sleep(2)
+            time.sleep(3)
         except Exception:
             try:
                 self.driver.quit()
             except Exception:
                 pass
-            self.driver = _make_driver()
+            self.driver = _driver()
             self._boot()
 
-    def _fetch(self, url: str, body: str) -> dict:
+    def _api(self, path_with_query: str, body: str) -> dict:
         script = """
-            const done = arguments[arguments.length - 1];
-            const url = arguments[0];
+            const done = arguments[arguments.length-1];
+            const path = arguments[0];
             const body = arguments[1];
-            const csrf = (document.cookie.split(';').map(s => s.trim())
-                .find(s => s.startsWith('tt_csrf_token=')) || '=').split('=').slice(1).join('=');
-            fetch(url, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'x-tt-csrf-token': csrf,
-                'tt-csrf-token': csrf
-              },
-              body: body,
-              credentials: 'include'
-            }).then(r => r.text().then(t => done({status: r.status, body: (t||'').slice(0, 600)})))
-              .catch(e => done({error: String(e)}));
+            (async () => {
+              try {
+                let ware = '';
+                try {
+                  const h = await fetch(path.split('?')[0] + '?aid=1988', {
+                    method: 'HEAD', credentials: 'include',
+                    headers: {
+                      'x-secsdk-csrf-request': '1',
+                      'x-secsdk-csrf-version': '1.2.5'
+                    }
+                  });
+                  ware = h.headers.get('x-ware-csrf-token') || h.headers.get('X-Ware-Csrf-Token') || '';
+                  if (ware.includes(',')) ware = ware.split(',')[1] || ware.split(',')[0];
+                } catch(e) {}
+                const csrf = (document.cookie.split(';').map(s=>s.trim())
+                  .find(s=>s.startsWith('tt_csrf_token='))||'=').split('=').slice(1).join('=');
+                const headers = {
+                  'Content-Type': 'application/x-www-form-urlencoded',
+                  'x-tt-csrf-token': csrf
+                };
+                if (ware) headers['x-secsdk-csrf-token'] = ware.trim();
+                const r = await fetch(path, {
+                  method: 'POST', credentials: 'include', headers, body
+                });
+                const t = await r.text();
+                done({status: r.status, body: (t||'').slice(0, 700)});
+              } catch(e) {
+                done({error: String(e)});
+              }
+            })();
         """
-        return self.driver.execute_async_script(script, url, body)
+        return self.driver.execute_async_script(script, path_with_query, body)
 
-    def _retry_fetch(self, url, body, tries=3):
+    def _retry_api(self, path, body, tries=4):
         last = {}
         for i in range(tries):
             try:
-                last = self._fetch(url, body)
-                if _ok_json(last.get("body", "")):
-                    return last, True
-                # csrf die → refresh
-                if "csrf" in str(last.get("body", "")).lower() or last.get("status") == 403:
-                    self._refresh_session()
-                time.sleep(1.2 + i * 0.8)
+                last = self._api(path, body)
+                if last.get("error"):
+                    self._refresh()
+                    time.sleep(1.5)
+                    continue
+                ok, reason = _parse_ok(last.get("body", ""))
+                if ok:
+                    return last, True, reason
+                if reason == "login_expired":
+                    self.login_ok = False
+                    return last, False, reason
+                if reason in ("bad_csrf", "argus_block"):
+                    self._refresh()
+                time.sleep(1.2 + i * 0.6)
             except Exception as e:
                 last = {"error": str(e)}
-                self._refresh_session()
+                self._refresh()
                 time.sleep(1.5)
-        return last, _ok_json(last.get("body", ""))
+        ok, reason = _parse_ok(last.get("body", ""))
+        return last, ok, reason
 
-    # ───── FOLLOW (ổn định) ─────
     def follow(self, user_id: str) -> dict:
         user_id = str(user_id).strip()
-        if not user_id or not user_id.isdigit():
-            return {"ok": False, "action": "follow", "error": "bad uid"}
-        url = ("https://www.tiktok.com/api/commit/follow/user/"
-               "?aid=1988&app_name=tiktok_web&device_platform=web&channel=tiktok_web")
-        body = f"action_type=1&user_id={user_id}&channel_id=0&from=18"
-        raw, ok = self._retry_fetch(url, body, tries=4)
-        # UI fallback: mở profile bấm Follow
-        if not ok:
-            try:
-                self.driver.get(f"https://www.tiktok.com/@tiktok")  # warm
-                time.sleep(1)
-                # thử API lần nữa sau warm
-                raw, ok = self._retry_fetch(url, body, tries=2)
-            except Exception as e:
-                raw = {"error": str(e)}
-        return {"ok": ok, "action": "follow", "target": user_id, "raw": raw}
+        if not user_id.isdigit():
+            return {"ok": False, "action": "follow", "error": "bad_uid"}
+        path = ("https://www.tiktok.com/api/commit/follow/user/"
+                "?aid=1988&app_name=tiktok_web&device_platform=web&channel=tiktok_web")
+        body = "action_type=1&user_id=%s&channel_id=0&from=18" % user_id
+        raw, ok, reason = self._retry_api(path, body, tries=4)
+        return {"ok": ok, "action": "follow", "target": user_id, "reason": reason, "raw": raw}
 
-    # ───── LIKE ─────
     def like(self, aweme_id: str) -> dict:
         aweme_id = str(aweme_id).strip()
-        if not aweme_id:
-            return {"ok": False, "action": "like", "error": "no id"}
-        url = ("https://www.tiktok.com/api/commit/item/digg/"
-               "?aid=1988&app_name=tiktok_web&device_platform=web&channel=tiktok_web")
-        body = f"aweme_id={aweme_id}&type=1&channel_id=0"
-        raw, ok = self._retry_fetch(url, body, tries=3)
+        path = ("https://www.tiktok.com/api/commit/item/digg/"
+                "?aid=1988&app_name=tiktok_web&device_platform=web&channel=tiktok_web")
+        body = "aweme_id=%s&type=1&channel_id=0" % aweme_id
+        raw, ok, reason = self._retry_api(path, body, tries=3)
         if ok:
-            return {"ok": True, "action": "like", "target": aweme_id, "raw": raw}
-
-        # UI fallback: vào video + click like
-        ui_ok = self._like_ui(aweme_id)
-        if ui_ok:
-            return {"ok": True, "action": "like", "target": aweme_id, "raw": {"via": "ui"}}
-        # API lại sau UI
-        raw2, ok2 = self._retry_fetch(url, body, tries=2)
-        return {"ok": ok2, "action": "like", "target": aweme_id, "raw": raw2 or raw}
+            return {"ok": True, "action": "like", "target": aweme_id, "reason": reason, "raw": raw}
+        if self._like_ui(aweme_id):
+            return {"ok": True, "action": "like", "target": aweme_id, "reason": "ui_dblclick", "raw": raw}
+        return {"ok": False, "action": "like", "target": aweme_id, "reason": reason, "raw": raw}
 
     def _like_ui(self, aweme_id: str) -> bool:
         from selenium.webdriver.common.by import By
-        from selenium.webdriver.common.keys import Keys
+        from selenium.webdriver.common.action_chains import ActionChains
         try:
-            self.driver.get(f"https://www.tiktok.com/@/video/{aweme_id}")
-            time.sleep(3.5 + random.random())
-            # double-tap style via keyboard 'l' or click selectors
-            selectors = [
-                "[data-e2e='like-icon']",
-                "[data-e2e='browse-like-icon']",
-                "[data-e2e='like-count']",
-                "button[aria-label*='Like']",
-                "button[aria-label*='like']",
-                "span[data-e2e='like-icon']",
-            ]
-            for sel in selectors:
+            self.driver.get("https://www.tiktok.com/foryou")
+            time.sleep(3)
+            vids = self.driver.find_elements(By.CSS_SELECTOR, "video")
+            if vids:
+                ActionChains(self.driver).move_to_element(vids[0]).pause(0.2).double_click().perform()
+                time.sleep(1.5)
+                return True
+            self.driver.get("https://www.tiktok.com/@x/video/%s" % aweme_id)
+            time.sleep(3)
+            for sel in ["[data-e2e='like-icon']", "[data-e2e='browse-like-icon']", "video"]:
                 els = self.driver.find_elements(By.CSS_SELECTOR, sel)
-                for el in els[:2]:
-                    try:
-                        el.click()
-                        time.sleep(1.2)
-                        return True
-                    except Exception:
-                        continue
-            # body click + L key (some builds)
-            try:
-                body = self.driver.find_element(By.TAG_NAME, "body")
-                body.send_keys("l")
-                time.sleep(1)
-            except Exception:
-                pass
-            return False
+                if not els:
+                    continue
+                try:
+                    if sel == "video":
+                        ActionChains(self.driver).move_to_element(els[0]).double_click().perform()
+                    else:
+                        els[0].click()
+                    time.sleep(1.2)
+                    return True
+                except Exception:
+                    continue
         except Exception:
-            return False
+            pass
+        return False
 
-    # ───── COMMENT ─────
     def comment(self, aweme_id: str, text: str = "nice") -> dict:
         aweme_id = str(aweme_id).strip()
-        text = (text or "nice").strip()[:150] or "nice"
-        if not aweme_id:
-            return {"ok": False, "action": "comment", "error": "no id"}
-        url = ("https://www.tiktok.com/api/comment/publish/"
-               "?aid=1988&app_name=tiktok_web&device_platform=web&channel=tiktok_web")
-        body = f"aweme_id={aweme_id}&text={quote(text)}&text_extra=%5B%5D&channel_id=0"
-        raw, ok = self._retry_fetch(url, body, tries=3)
+        text = (text or "nice")[:150]
+        path = ("https://www.tiktok.com/api/comment/publish/"
+                "?aid=1988&app_name=tiktok_web&device_platform=web&channel=tiktok_web")
+        body = "aweme_id=%s&text=%s&text_extra=%%5B%%5D&channel_id=0" % (aweme_id, quote(text))
+        raw, ok, reason = self._retry_api(path, body, tries=3)
         if ok:
-            return {"ok": True, "action": "comment", "target": aweme_id, "raw": raw}
-        # UI fallback
+            return {"ok": True, "action": "comment", "target": aweme_id, "reason": reason, "raw": raw}
         if self._comment_ui(aweme_id, text):
-            return {"ok": True, "action": "comment", "target": aweme_id, "raw": {"via": "ui"}}
-        raw2, ok2 = self._retry_fetch(url, body, tries=2)
-        return {"ok": ok2, "action": "comment", "target": aweme_id, "raw": raw2 or raw}
+            return {"ok": True, "action": "comment", "target": aweme_id, "reason": "ui", "raw": raw}
+        return {"ok": False, "action": "comment", "target": aweme_id, "reason": reason, "raw": raw}
 
     def _comment_ui(self, aweme_id: str, text: str) -> bool:
         from selenium.webdriver.common.by import By
         from selenium.webdriver.common.keys import Keys
         try:
-            self.driver.get(f"https://www.tiktok.com/@/video/{aweme_id}")
+            self.driver.get("https://www.tiktok.com/@x/video/%s" % aweme_id)
             time.sleep(3.5)
-            # mở box comment
             for sel in ["[data-e2e='comment-icon']", "[data-e2e='browse-comment-icon']"]:
                 els = self.driver.find_elements(By.CSS_SELECTOR, sel)
                 if els:
                     try:
                         els[0].click()
-                        time.sleep(1.5)
+                        time.sleep(1.2)
                     except Exception:
                         pass
-            boxes = self.driver.find_elements(By.CSS_SELECTOR,
-                "div[contenteditable='true'], textarea, [data-e2e='comment-input']")
-            for box in boxes:
-                try:
-                    box.click()
-                    box.send_keys(text)
-                    time.sleep(0.5)
-                    box.send_keys(Keys.ENTER)
-                    time.sleep(1.5)
-                    return True
-                except Exception:
-                    continue
-            return False
+            for sel in ["div[contenteditable='true']", "textarea", "[data-e2e='comment-input']"]:
+                boxes = self.driver.find_elements(By.CSS_SELECTOR, sel)
+                for box in boxes:
+                    try:
+                        box.click()
+                        box.send_keys(text)
+                        time.sleep(0.4)
+                        box.send_keys(Keys.ENTER)
+                        time.sleep(1.2)
+                        return True
+                    except Exception:
+                        continue
         except Exception:
-            return False
-
-    # ───── SHARE ─────
-    def share(self, aweme_id: str) -> dict:
-        aweme_id = str(aweme_id).strip()
-        url = ("https://www.tiktok.com/api/item/share/action/"
-               "?aid=1988&app_name=tiktok_web&device_platform=web")
-        body = f"item_id={aweme_id}&share_type=1"
-        raw, ok = self._retry_fetch(url, body, tries=3)
-        return {"ok": ok, "action": "share", "target": aweme_id, "raw": raw}
+            pass
+        return False
 
 
 def get_actor_for_account(acc: dict) -> TikTokActor:
-    m = _load_map()
+    m = _load()
     data = None
     for k in (acc.get("id"), acc.get("username"), acc.get("sessionid"), acc.get("user_field")):
         if k and str(k) in m:
             data = m[str(k)]
             break
     if not data or not data.get("cookies"):
-        raise RuntimeError("Thiếu full cookies cho %s" % acc.get("username"))
+        raise RuntimeError("Thiếu cookies cho %s — cập nhật tiktok_full.json" % acc.get("username"))
     return TikTokActor(data["cookies"]).start()
 
 
 def do_task_action(actor: TikTokActor, job_key: str, task: dict) -> dict:
-    """Chỉ trả ok=True khi action thành công (để farm chỉ claim job đã làm)."""
     if job_key in ("sub", "vip"):
         uid = str(task.get("uid") or "").strip()
         if not uid.isdigit():
-            return {"ok": False, "action": "follow", "error": "missing uid"}
+            return {"ok": False, "action": "follow", "error": "missing_uid"}
         return actor.follow(uid)
-
     if job_key == "tim":
         aweme = str(task.get("idpost") or "")
         if not aweme.isdigit():
             m = re.search(r"/video/(\d+)", str(task.get("link") or ""))
             aweme = m.group(1) if m else ""
         if not aweme:
-            return {"ok": False, "action": "like", "error": "no aweme_id"}
+            return {"ok": False, "action": "like", "error": "no_aweme"}
         return actor.like(aweme)
-
     if job_key == "cmt":
         aweme = str(task.get("idpost") or "")
         link = str(task.get("link") or "")
         if not aweme.isdigit():
             m = re.search(r"/video/(\d+)", link)
             aweme = m.group(1) if m else ""
-        text = "nice 👍"
+        text = "nice"
         nd = task.get("nd")
         if nd:
             try:
@@ -353,7 +337,6 @@ def do_task_action(actor: TikTokActor, job_key: str, task: dict) -> dict:
             except Exception:
                 text = str(nd)[:150]
         if not aweme:
-            return {"ok": False, "action": "comment", "error": "no aweme_id"}
+            return {"ok": False, "action": "comment", "error": "no_aweme"}
         return actor.comment(aweme, text)
-
-    return {"ok": False, "error": "unknown job"}
+    return {"ok": False, "error": "unknown_job"}
