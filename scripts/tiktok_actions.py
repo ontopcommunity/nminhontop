@@ -108,41 +108,39 @@ def _proxy_args():
     return [f"--proxy-server={server}"], None
 
 
-def _make_driver():
-    proxy_args, _auth = _proxy_args()
+def _make_driver(use_proxy: bool = True):
+    proxy_args, _auth = _proxy_args() if use_proxy else ([], None)
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    o = Options()
+    o.add_argument("--headless=new")
+    o.add_argument("--no-sandbox")
+    o.add_argument("--disable-dev-shm-usage")
+    o.add_argument("--disable-gpu")
+    o.add_argument("--window-size=1365,900")
+    o.add_argument("--disable-blink-features=AutomationControlled")
+    o.add_argument("--lang=en-US")
+    o.page_load_strategy = "eager"
+    for a in proxy_args:
+        o.add_argument(a)
+    o.binary_location = "/usr/bin/google-chrome"
     try:
         import undetected_chromedriver as uc
-        opts = uc.ChromeOptions()
-        opts.add_argument("--no-sandbox")
-        opts.add_argument("--disable-dev-shm-usage")
-        opts.add_argument("--disable-gpu")
-        opts.add_argument("--window-size=1365,900")
-        opts.add_argument("--lang=en-US")
+        uo = uc.ChromeOptions()
+        uo.add_argument("--no-sandbox")
+        uo.add_argument("--disable-dev-shm-usage")
+        uo.add_argument("--disable-gpu")
+        uo.add_argument("--window-size=1365,900")
+        uo.add_argument("--headless=new")
+        uo.page_load_strategy = "eager"
         for a in proxy_args:
-            opts.add_argument(a)
-        # headless new
-        opts.add_argument("--headless=new")
-        d = uc.Chrome(options=opts, headless=True, use_subprocess=True)
-        d.set_page_load_timeout(50)
-        d.set_script_timeout(45)
-        return d
+            uo.add_argument(a)
+        d = uc.Chrome(options=uo, headless=True, use_subprocess=True)
     except Exception:
-        from selenium import webdriver
-        from selenium.webdriver.chrome.options import Options
-        o = Options()
-        o.add_argument("--headless=new")
-        o.add_argument("--no-sandbox")
-        o.add_argument("--disable-dev-shm-usage")
-        o.add_argument("--disable-gpu")
-        o.add_argument("--window-size=1365,900")
-        o.add_argument("--disable-blink-features=AutomationControlled")
-        for a in proxy_args:
-            o.add_argument(a)
-        o.binary_location = "/usr/bin/google-chrome"
         d = webdriver.Chrome(options=o)
-        d.set_page_load_timeout(50)
-        d.set_script_timeout(45)
-        return d
+    d.set_page_load_timeout(25)
+    d.set_script_timeout(30)
+    return d
 
 
 def _parse_follow(body: str):
@@ -175,9 +173,27 @@ class TikTokActor:
 
     def start(self):
         with _lock:
-            self.driver = _make_driver()
-            self._boot()
-        return self
+            last_err = None
+            # Thử proxy trước, fail thì direct
+            for use_proxy in (True, False):
+                try:
+                    self.driver = _make_driver(use_proxy=use_proxy and bool(PROXY_URL))
+                    self._boot()
+                    if not use_proxy or not PROXY_URL:
+                        print("  [chrome] boot direct OK")
+                    else:
+                        print("  [chrome] boot proxy OK")
+                    return self
+                except Exception as e:
+                    last_err = e
+                    print("  [chrome] boot fail proxy=%s: %s" % (use_proxy, str(e)[:80]))
+                    try:
+                        if self.driver:
+                            self.driver.quit()
+                    except Exception:
+                        pass
+                    self.driver = None
+            raise RuntimeError("Chrome boot fail: %s" % last_err)
 
     def close(self):
         if self.driver:
@@ -189,15 +205,21 @@ class TikTokActor:
 
     def _boot(self):
         d = self.driver
-        d.get("https://www.tiktok.com/")
-        time.sleep(1.2)
+        try:
+            d.get("https://www.tiktok.com/")
+        except Exception:
+            pass  # eager/timeout vẫn có thể set cookie
+        time.sleep(1.0)
         for c in _cookies(self.cookies_str):
             try:
                 d.add_cookie(c)
             except Exception:
                 pass
-        d.get("https://www.tiktok.com/foryou")
-        time.sleep(3 + random.random())
+        try:
+            d.get("https://www.tiktok.com/foryou")
+        except Exception:
+            pass
+        time.sleep(2.5 + random.random())
 
     def _csrf_api(self, path: str, body: str) -> dict:
         script = """
