@@ -29,7 +29,7 @@ SESSIONS_FILE = SCRIPT_DIR / "tiktok_sessions.txt"
 MAX_MISS      = 10
 DEFAULT_TARGET = 10000
 DELAY_MIN, DELAY_MAX = 3, 8
-WORKERS       = 4
+WORKERS       = 1  # Chrome nặng – 1 acc/lúc trên Cloud Shell
 
 JOBS = {
     "sub": {"name": "Sub",    "path": "subcheo"},
@@ -571,8 +571,8 @@ def main():
     t = input(f"  {C.Y}› Mục tiêu nhiệm vụ [{DEFAULT_TARGET}] {C.R}").strip()
     global_target = int(t) if t.isdigit() else DEFAULT_TARGET
 
-    w = input(f"  {C.Y}› Số acc song song [{min(WORKERS, len(accounts))}] {C.R}").strip()
-    workers = int(w) if w.isdigit() else min(WORKERS, len(accounts))
+    w = input(f"  {C.Y}› Số acc song song [1] {C.R}").strip()
+    workers = int(w) if w.isdigit() else 1
     workers = max(1, min(workers, len(accounts)))
 
     states = {a["id"]: AccState(a) for a in accounts}

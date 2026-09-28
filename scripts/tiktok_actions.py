@@ -217,11 +217,7 @@ def _proxy_args():
     return ["--proxy-server=%s" % server], None
 
 
-def _make_driver(use_proxy: bool = True):
-    proxy_args, proxy_ext = ([], None)
-    if use_proxy and PROXY_URL:
-        proxy_args, proxy_ext = _proxy_args()
-    from selenium import webdriver
+def _chrome_options(proxy_args, proxy_ext):
     from selenium.webdriver.chrome.options import Options
     o = Options()
     o.add_argument("--headless=new")
@@ -231,31 +227,67 @@ def _make_driver(use_proxy: bool = True):
     o.add_argument("--window-size=1365,900")
     o.add_argument("--disable-blink-features=AutomationControlled")
     o.add_argument("--lang=en-US")
+    o.add_argument("--remote-allow-origins=*")
     o.page_load_strategy = "eager"
     for a in proxy_args:
         o.add_argument(a)
     if proxy_ext:
-        o.add_extension(proxy_ext)
-    o.binary_location = "/usr/bin/google-chrome"
+        try:
+            o.add_extension(proxy_ext)
+        except Exception:
+            pass
+    for binary in ("/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium", "/usr/bin/chromium-browser"):
+        if os.path.exists(binary):
+            o.binary_location = binary
+            break
+    return o
+
+
+def _make_driver(use_proxy: bool = True):
+    """Selenium thuần trước (ổn định Cloud Shell), UC chỉ là phụ."""
+    proxy_args, proxy_ext = ([], None)
+    if use_proxy and PROXY_URL:
+        proxy_args, proxy_ext = _proxy_args()
+    from selenium import webdriver
+    from selenium.webdriver.chrome.service import Service
+    o = _chrome_options(proxy_args, proxy_ext)
+    last = None
+    # 1) Selenium Manager (Selenium 4.6+)
+    try:
+        d = webdriver.Chrome(options=o)
+        d.set_page_load_timeout(35 if use_proxy else 25)
+        d.set_script_timeout(35)
+        return d
+    except Exception as e:
+        last = e
+    # 2) chromedriver trên PATH / snap
+    for drv in ("/usr/bin/chromedriver", "/usr/local/bin/chromedriver", "/snap/bin/chromium.chromedriver"):
+        if os.path.exists(drv):
+            try:
+                d = webdriver.Chrome(service=Service(drv), options=o)
+                d.set_page_load_timeout(35 if use_proxy else 25)
+                d.set_script_timeout(35)
+                return d
+            except Exception as e:
+                last = e
+    # 3) undetected_chromedriver (có thể fail trên Cloud Shell)
     try:
         import undetected_chromedriver as uc
         uo = uc.ChromeOptions()
         uo.add_argument("--no-sandbox")
         uo.add_argument("--disable-dev-shm-usage")
         uo.add_argument("--disable-gpu")
-        uo.add_argument("--window-size=1365,900")
         uo.add_argument("--headless=new")
         uo.page_load_strategy = "eager"
         for a in proxy_args:
             uo.add_argument(a)
-        if proxy_ext:
-            uo.add_extension(proxy_ext)
         d = uc.Chrome(options=uo, headless=True, use_subprocess=True)
-    except Exception:
-        d = webdriver.Chrome(options=o)
-    d.set_page_load_timeout(35 if use_proxy else 25)
-    d.set_script_timeout(35)
-    return d
+        d.set_page_load_timeout(35)
+        d.set_script_timeout(35)
+        return d
+    except Exception as e:
+        last = e
+    raise RuntimeError("Unable to start Chrome: %s" % last)
 
 
 def _parse_follow(body: str):
