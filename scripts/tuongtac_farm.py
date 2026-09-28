@@ -191,6 +191,60 @@ def load_accounts():
                 accs[aid] = {"id": aid, "username": uname, "user_field": ufield, "sessionid": sess}
     return list(accs.values())
 
+
+def check_tt_session_alive(cookies_str: str) -> bool:
+    """Passport check – True nếu session còn sống"""
+    if not cookies_str:
+        return False
+    try:
+        import requests as rq
+        ck = {}
+        for p in cookies_str.split(";"):
+            p = p.strip()
+            if "=" in p:
+                k, v = p.split("=", 1)
+                ck[k.strip()] = v.strip()
+        s = rq.Session()
+        s.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": "https://www.tiktok.com/",
+        })
+        for k, v in ck.items():
+            s.cookies.set(k, v, domain=".tiktok.com")
+        r = s.get(
+            "https://www.tiktok.com/passport/web/account/info/",
+            params={"aid": "1459"},
+            timeout=15,
+        )
+        d = r.json()
+        return d.get("message") == "success" and bool(d.get("data", {}).get("user_id"))
+    except Exception:
+        return False
+
+
+def filter_alive_accounts(accounts):
+    """Chỉ giữ acc session còn sống – cấm dead"""
+    from tiktok_actions import _load
+    m = _load()
+    alive = []
+    for a in accounts:
+        data = None
+        for k in (a.get("id"), a.get("username"), a.get("sessionid"), a.get("user_field")):
+            if k and str(k) in m:
+                data = m[str(k)]
+                break
+        cookies = (data or {}).get("cookies") or ""
+        if not cookies:
+            log_warn(f"Skip @{a.get('username')} – không có cookies")
+            continue
+        if check_tt_session_alive(cookies):
+            alive.append(a)
+            log_ok(f"Session OK @{a.get('username')}")
+        else:
+            log_err(f"DEAD drop @{a.get('username')} – session_expired")
+    return alive
+
+
 def set_active_nick(sid, nick_id):
     return api_post(sid, "/cauhinh/datnick.php", {"iddat": nick_id, "loai": "tt"})
 
@@ -391,6 +445,15 @@ def farm_one(sid, st: AccState, mode: str):
                         with states_lock:
                             st.result = "TT:" + str(ar.get("action", "ok"))
                         break
+                    reason = str(ar.get("reason") or "")
+                    if reason == "login_expired":
+                        with states_lock:
+                            st.status = "stopped"
+                            st.result = "SESSION DIE"
+                            st.msg = "login_expired"
+                            st.miss = MAX_MISS  # ép dừng acc
+                        success = False
+                        break
                     with states_lock:
                         st.result = "TT retry %d" % (attempt + 1)
                         st.msg = str(ar.get("error") or ar.get("raw", ""))[:36]
@@ -478,12 +541,18 @@ def main():
         log_err("Không có acc – kiểm tra scripts/nicks.txt")
         return
 
-    lines = [f"{C.G}✔{C.R}  Load {C.B}{len(accounts)}{C.R} acc từ nicks.txt / sessions"]
-    for a in accounts[:8]:
+    log_info("Kiểm tra session TikTok (passport) – cấm acc die...")
+    accounts = filter_alive_accounts(accounts)
+    if not accounts:
+        log_err("Không còn acc nào sống – cập nhật cookie")
+        return
+
+    lines = [f"{C.G}✔{C.R}  {C.B}{len(accounts)}{C.R} acc SỐNG (đã lọc die)"]
+    for a in accounts[:12]:
         lines.append(f"    {C.W}{a['username']:<16}{C.R} {C.K}{a['id'][:18]}{C.R}")
-    if len(accounts) > 8:
-        lines.append(f"    {C.K}... +{len(accounts)-8} acc nữa{C.R}")
-    box("DANH SÁCH ACC", lines, width=60, color=C.C)
+    if len(accounts) > 12:
+        lines.append(f"    {C.K}... +{len(accounts)-12}{C.R}")
+    box("ACC SẴN SÀNG", lines, width=60, color=C.C)
     print()
 
     box("CHỌN CHẾ ĐỘ", [
