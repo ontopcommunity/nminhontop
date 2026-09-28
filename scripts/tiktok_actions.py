@@ -1,141 +1,29 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ONTOP TikTok Actor v3
-Tham khảo: tiktokpy (Playwright session), undetected-chromedriver, proxy residential
-- Proxy qua env: PROXY_URL=http://user:pass@host:port  hoặc  http://host:port
-- Follow chính: mở profile + click Follow (UI) — panel verify được
-- Follow phụ: API + follow_status in (1,2)
-- Like: double-click / digg API
+ONTOP TikTok Actor – Playwright (không proxy)
+Follow / Like / Comment qua browser context + session cookie
 """
 
 from __future__ import annotations
 import os, re, json, time, random, threading
 from pathlib import Path
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 
 SCRIPT_DIR = Path(__file__).parent
 FULL_JSON = SCRIPT_DIR / "tiktok_full.json"
-# ═══ PROXY RESIDENTIAL ═══
-# PROXY_URL=http://user:pass@host:port   (ưu tiên – residential)
-# PROXY_LIST=scripts/proxies.txt         (mỗi dòng 1 proxy)
-# PROXY_FORCE=1                          (bắt buộc proxy, không fallback direct)
-# Không set gì → thử free (yếu), rồi direct
 
-BUILTIN_PROXIES = [
-    "http://159.223.167.188:10000",
-    "http://190.97.229.118:999",
-    "http://165.154.162.73:8888",
-    "http://107.167.18.122:443",
-]
-
-def _parse_proxy(url: str):
-    """Trả (server_no_auth, username, password) hoặc (None,None,None)."""
-    url = (url or "").strip()
-    if not url:
-        return None, None, None
-    if "://" not in url:
-        url = "http://" + url
-    u = urlparse(url)
-    if not u.hostname:
-        return None, None, None
-    port = u.port or (443 if u.scheme == "https" else 80)
-    server = "%s://%s:%s" % (u.scheme or "http", u.hostname, port)
-    return server, u.username, u.password
-
-
-def _load_proxy_candidates():
-    cands = []
-    env = os.getenv("PROXY_URL", "").strip()
-    if env:
-        cands.append(env)
-    list_path = os.getenv("PROXY_LIST", "").strip()
-    if not list_path:
-        # mặc định file trong scripts/
-        lp = SCRIPT_DIR / "proxies.txt"
-        if lp.exists():
-            list_path = str(lp)
-    if list_path and Path(list_path).exists():
-        for line in Path(list_path).read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#"):
-                if "://" not in line and line.count(":") >= 3:
-                    # user:pass@host:port or host:port:user:pass
-                    if "@" in line:
-                        cands.append("http://" + line)
-                    else:
-                        parts = line.split(":")
-                        if len(parts) == 4:
-                            # host:port:user:pass
-                            cands.append("http://%s:%s@%s:%s" % (parts[2], parts[3], parts[0], parts[1]))
-                        else:
-                            cands.append("http://" + line)
-                else:
-                    cands.append(line if "://" in line else "http://" + line)
-    # free chỉ khi không có residential config
-    if not env and not (list_path and Path(list_path).exists() if list_path else False):
-        cands.extend(BUILTIN_PROXIES)
-    # unique preserve order
-    seen = set()
-    out = []
-    for c in cands:
-        if c not in seen:
-            seen.add(c)
-            out.append(c)
-    return out
-
-
-def _test_proxy(px: str, timeout: float = 8) -> bool:
-    """Health-check: HTTP qua proxy tới ipify (nhanh). Residential nên pass."""
-    try:
-        import requests as rq
-        r = rq.get(
-            "https://api.ipify.org?format=json",
-            proxies={"http": px, "https": px},
-            timeout=timeout,
-        )
-        return r.status_code == 200 and bool(r.text)
-    except Exception:
-        return False
-
-
-def _pick_proxy() -> str:
-    force = os.getenv("PROXY_FORCE", "").strip() in ("1", "true", "yes")
-    cands = _load_proxy_candidates()
-    if not cands:
-        print("  [proxy] không cấu hình – direct")
-        return ""
-    for px in cands:
-        server, user, pw = _parse_proxy(px)
-        label = server or px
-        if user:
-            label = label.replace("://", "://***:***@") if "://" in label else label
-            # reconstruct display without password
-            u = urlparse(px if "://" in px else "http://" + px)
-            label = "%s://%s:***@%s:%s" % (u.scheme, u.username, u.hostname, u.port)
-        print("  [proxy] test", label, "...", end=" ", flush=True)
-        # build test URL with auth embedded
-        test_url = px if "://" in px else "http://" + px
-        if _test_proxy(test_url):
-            print("OK")
-            return test_url
-        print("FAIL")
-    if force:
-        print("  [proxy] PROXY_FORCE=1 nhưng không proxy nào sống")
-        return cands[0]  # vẫn dùng cái đầu
-    print("  [proxy] không proxy sống – direct (set PROXY_URL residential để ổn định)")
-    return ""
-
-
-PROXY_URL = _pick_proxy()
-PROXY_FORCE = os.getenv("PROXY_FORCE", "").strip() in ("1", "true", "yes")
+# Không dùng proxy
+PROXY_URL = ""
+PROXY_FORCE = False
 
 _lock = threading.Lock()
 _map = None
+_playwright = None
+_browser = None
 
 
 def _load():
-    """Load account cookies map from tiktok_full.json"""
     global _map
     if _map is not None:
         return _map
@@ -147,147 +35,38 @@ def _load():
                     if k:
                         _map[str(k)] = a
         except Exception as e:
-            print("  [warn] load tiktok_full.json:", e)
+            print("  [warn] load json:", e)
     return _map
 
 
-def _cookies(s: str):
+def _cookies_list(cookies_str: str):
     out = []
-    for part in (s or "").split(";"):
+    for part in (cookies_str or "").split(";"):
         part = part.strip()
         if "=" not in part:
             continue
         k, v = part.split("=", 1)
-        out.append({"name": k.strip(), "value": v.strip(), "domain": ".tiktok.com", "path": "/"})
+        out.append({
+            "name": k.strip(),
+            "value": v.strip(),
+            "domain": ".tiktok.com",
+            "path": "/",
+        })
     return out
 
 
-
-def _make_proxy_extension(server: str, username: str, password: str) -> str:
-    """Chrome extension tạm để auth proxy (residential user:pass)."""
-    import tempfile, zipfile
-    u = urlparse(server)
-    host = u.hostname or ""
-    port = u.port or 80
-    scheme = u.scheme or "http"
-    manifest = """{
-  "version": "1.0.0",
-  "manifest_version": 2,
-  "name": "ONTOP Proxy Auth",
-  "permissions": ["proxy", "tabs", "unlimitedStorage", "storage", "<all_urls>", "webRequest", "webRequestBlocking"],
-  "background": {"scripts": ["background.js"]},
-  "minimum_chrome_version": "22.0.0"
-}"""
-    background = """
-var config = {
-    mode: "fixed_servers",
-    rules: {
-      singleProxy: { scheme: "%s", host: "%s", port: %d },
-      bypassList: ["localhost", "127.0.0.1"]
-    }
-};
-chrome.proxy.settings.set({value: config, scope: "regular"}, function() {});
-function callbackFn(details) {
-    return { authCredentials: { username: "%s", password: "%s" } };
-}
-chrome.webRequest.onAuthRequired.addListener(
-    callbackFn,
-    {urls: ["<all_urls>"]},
-    ['blocking']
-);
-""" % (scheme, host, int(port), username.replace('"', '\\"'), password.replace('"', '\\"'))
-    tmp = tempfile.mkdtemp(prefix="tt_proxy_")
-    ext = os.path.join(tmp, "proxy_auth_ext.zip")
-    with zipfile.ZipFile(ext, "w") as zf:
-        zf.writestr("manifest.json", manifest)
-        zf.writestr("background.js", background)
-    return ext
-
-
-def _proxy_args():
-    """Chrome args + optional auth extension path."""
-    if not PROXY_URL:
-        return [], None
-    server, user, password = _parse_proxy(PROXY_URL)
-    if not server:
-        return [], None
-    if user and password:
-        ext = _make_proxy_extension(server, user, password)
-        return [], ext  # extension handles proxy; no --proxy-server
-    return ["--proxy-server=%s" % server], None
-
-
-def _chrome_options(proxy_args, proxy_ext):
-    from selenium.webdriver.chrome.options import Options
-    o = Options()
-    o.add_argument("--headless=new")
-    o.add_argument("--no-sandbox")
-    o.add_argument("--disable-dev-shm-usage")
-    o.add_argument("--disable-gpu")
-    o.add_argument("--window-size=1365,900")
-    o.add_argument("--disable-blink-features=AutomationControlled")
-    o.add_argument("--lang=en-US")
-    o.add_argument("--remote-allow-origins=*")
-    o.page_load_strategy = "eager"
-    for a in proxy_args:
-        o.add_argument(a)
-    if proxy_ext:
-        try:
-            o.add_extension(proxy_ext)
-        except Exception:
-            pass
-    for binary in ("/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium", "/usr/bin/chromium-browser"):
-        if os.path.exists(binary):
-            o.binary_location = binary
-            break
-    return o
-
-
-def _make_driver(use_proxy: bool = True):
-    """Selenium thuần trước (ổn định Cloud Shell), UC chỉ là phụ."""
-    proxy_args, proxy_ext = ([], None)
-    if use_proxy and PROXY_URL:
-        proxy_args, proxy_ext = _proxy_args()
-    from selenium import webdriver
-    from selenium.webdriver.chrome.service import Service
-    o = _chrome_options(proxy_args, proxy_ext)
-    last = None
-    # 1) Selenium Manager (Selenium 4.6+)
-    try:
-        d = webdriver.Chrome(options=o)
-        d.set_page_load_timeout(35 if use_proxy else 25)
-        d.set_script_timeout(35)
-        return d
-    except Exception as e:
-        last = e
-    # 2) chromedriver trên PATH / snap
-    for drv in ("/usr/bin/chromedriver", "/usr/local/bin/chromedriver", "/snap/bin/chromium.chromedriver"):
-        if os.path.exists(drv):
-            try:
-                d = webdriver.Chrome(service=Service(drv), options=o)
-                d.set_page_load_timeout(35 if use_proxy else 25)
-                d.set_script_timeout(35)
-                return d
-            except Exception as e:
-                last = e
-    # 3) undetected_chromedriver (có thể fail trên Cloud Shell)
-    try:
-        import undetected_chromedriver as uc
-        uo = uc.ChromeOptions()
-        uo.add_argument("--no-sandbox")
-        uo.add_argument("--disable-dev-shm-usage")
-        uo.add_argument("--disable-gpu")
-        uo.add_argument("--headless=new")
-        uo.page_load_strategy = "eager"
-        for a in proxy_args:
-            uo.add_argument(a)
-        d = uc.Chrome(options=uo, headless=True, use_subprocess=True)
-        d.set_page_load_timeout(35)
-        d.set_script_timeout(35)
-        return d
-    except Exception as e:
-        last = e
-    raise RuntimeError("Unable to start Chrome: %s" % last)
+def _ensure_browser():
+    global _playwright, _browser
+    with _lock:
+        if _browser is not None:
+            return _browser
+        from playwright.sync_api import sync_playwright
+        _playwright = sync_playwright().start()
+        _browser = _playwright.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled"],
+        )
+        return _browser
 
 
 def _parse_follow(body: str):
@@ -316,67 +95,62 @@ def _parse_follow(body: str):
 class TikTokActor:
     def __init__(self, cookies_str: str):
         self.cookies_str = cookies_str
-        self.driver = None
+        self.context = None
+        self.page = None
 
     def start(self):
+        browser = _ensure_browser()
         with _lock:
-            last_err = None
-            # Thử proxy trước, fail thì direct
-            modes = [True]
-            if not PROXY_FORCE:
-                modes.append(False)  # fallback direct khi không FORCE
-            for use_proxy in modes:
-                try:
-                    self.driver = _make_driver(use_proxy=use_proxy and bool(PROXY_URL))
-                    self._boot()
-                    if use_proxy and PROXY_URL:
-                        print("  [chrome] boot proxy OK")
-                    else:
-                        print("  [chrome] boot direct OK")
-                    return self
-                except Exception as e:
-                    last_err = e
-                    print("  [chrome] boot fail proxy=%s: %s" % (use_proxy, str(e)[:80]))
-                    try:
-                        if self.driver:
-                            self.driver.quit()
-                    except Exception:
-                        pass
-                    self.driver = None
-            raise RuntimeError("Chrome boot fail: %s" % last_err)
+            self.context = browser.new_context(
+                viewport={"width": 1365, "height": 900},
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                locale="en-US",
+            )
+            self.page = self.context.new_page()
+            self.page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                window.chrome = { runtime: {} };
+                Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+                Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+            """)
+            # Playwright: vào domain trước rồi gắn cookie
+            try:
+                self.page.goto("https://www.tiktok.com/", wait_until="domcontentloaded", timeout=45000)
+            except Exception as e:
+                print("  [pw] seed warn:", str(e)[:80])
+            try:
+                self.context.add_cookies(_cookies_list(self.cookies_str))
+            except Exception as e:
+                print("  [pw] cookie warn:", str(e)[:80])
+            try:
+                self.page.goto("https://www.tiktok.com/foryou", wait_until="domcontentloaded", timeout=45000)
+            except Exception as e:
+                print("  [pw] foryou warn:", str(e)[:80])
+            time.sleep(2 + random.random())
+            # debug login cookie
+            try:
+                names = [c["name"] for c in self.context.cookies() if "session" in c["name"].lower() or c["name"] in ("sid_tt", "sessionid", "sessionid_ss")]
+                print("  [pw] session cookies:", names[:6])
+            except Exception:
+                pass
+        return self
 
     def close(self):
-        if self.driver:
-            try:
-                self.driver.quit()
-            except Exception:
-                pass
-            self.driver = None
-
-    def _boot(self):
-        d = self.driver
         try:
-            d.get("https://www.tiktok.com/")
-        except Exception:
-            pass  # eager/timeout vẫn có thể set cookie
-        time.sleep(1.0)
-        for c in _cookies(self.cookies_str):
-            try:
-                d.add_cookie(c)
-            except Exception:
-                pass
-        try:
-            d.get("https://www.tiktok.com/foryou")
+            if self.context:
+                self.context.close()
         except Exception:
             pass
-        time.sleep(2.5 + random.random())
+        self.context = None
+        self.page = None
 
     def _csrf_api(self, path: str, body: str) -> dict:
         script = """
-            const done = arguments[arguments.length-1];
-            const path = arguments[0];
-            const body = arguments[1];
-            (async () => {
+            async ([path, body]) => {
               try {
                 let ware = '';
                 try {
@@ -397,85 +171,78 @@ class TikTokActor:
                 if (ware) headers['x-secsdk-csrf-token'] = ware;
                 const r = await fetch(path, {method:'POST', credentials:'include', headers, body});
                 const t = await r.text();
-                done({status: r.status, body: (t||'').slice(0, 800)});
-              } catch(e) { done({error: String(e)}); }
-            })();
+                return {status: r.status, body: (t||'').slice(0, 800)};
+              } catch(e) { return {error: String(e)}; }
+            }
         """
-        return self.driver.execute_async_script(script, path, body)
+        return self.page.evaluate(script, [path, body])
 
     def follow(self, user_id: str, username: str = "") -> dict:
-        """UI profile follow trước, API sau. Chỉ OK khi follow_status 1|2."""
         user_id = str(user_id).strip()
         username = (username or "").strip().lstrip("@")
-        # 1) UI follow on profile
         ui_ok = False
         if username:
             ui_ok = self._follow_ui(username)
-        # 2) API confirm / force
         path = ("https://www.tiktok.com/api/commit/follow/user/"
                 "?aid=1988&app_name=tiktok_web&device_platform=web&channel=tiktok_web")
         body = "action_type=1&user_id=%s&channel_id=0&from=18&from_pre=13" % user_id
-        raw = {}
-        ok = False
-        reason = "no_attempt"
-        for attempt in range(3):
+        raw, ok, reason = {}, False, "no_attempt"
+        for _ in range(3):
             try:
                 raw = self._csrf_api(path, body)
                 ok, reason = _parse_follow(raw.get("body", ""))
-                if ok:
+                if ok or reason == "login_expired":
                     break
-                if reason == "login_expired":
-                    break
-                time.sleep(1.5)
+                time.sleep(1.2)
             except Exception as e:
                 reason = str(e)[:40]
-                time.sleep(1.5)
+                time.sleep(1.2)
         if ok:
             return {"ok": True, "action": "follow", "target": user_id, "reason": reason, "raw": raw, "ui": ui_ok}
         if ui_ok:
-            # UI clicked Follow — treat as success for panel
             return {"ok": True, "action": "follow", "target": user_id, "reason": "ui_clicked", "raw": raw, "ui": True}
         return {"ok": False, "action": "follow", "target": user_id, "reason": reason, "raw": raw, "ui": ui_ok}
 
     def _follow_ui(self, username: str) -> bool:
-        from selenium.webdriver.common.by import By
         try:
-            self.driver.get("https://www.tiktok.com/@%s" % username)
-            time.sleep(4 + random.random())
+            self.page.goto("https://www.tiktok.com/@%s" % username, wait_until="domcontentloaded", timeout=40000)
+            time.sleep(2.5 + random.random())
             selectors = [
                 "[data-e2e='follow-button']",
                 "button[data-e2e='follow-button']",
                 "button[data-e2e='user-follow']",
             ]
             for sel in selectors:
-                els = self.driver.find_elements(By.CSS_SELECTOR, sel)
-                for el in els:
-                    txt = (el.text or "").lower()
+                loc = self.page.locator(sel)
+                if loc.count() == 0:
+                    continue
+                for i in range(min(loc.count(), 3)):
+                    el = loc.nth(i)
+                    try:
+                        txt = (el.inner_text(timeout=2000) or "").lower()
+                    except Exception:
+                        txt = ""
                     if "following" in txt or "requested" in txt or "đang follow" in txt:
-                        return True  # already following
-                    if "follow" in txt or "theo dõi" in txt or txt.strip() == "":
+                        return True
+                    if "follow" in txt or "theo dõi" in txt or not txt.strip():
                         try:
-                            el.click()
-                            time.sleep(2)
+                            el.click(timeout=3000)
+                            time.sleep(1.5)
                             return True
                         except Exception:
                             continue
-            # XPath text buttons
-            for xp in [
-                "//button[contains(.,'Follow')]",
-                "//button[contains(.,'Theo dõi')]",
-            ]:
-                els = self.driver.find_elements(By.XPATH, xp)
-                for el in els:
+            for text in ("Follow", "Theo dõi"):
+                btn = self.page.get_by_role("button", name=re.compile(text, re.I))
+                if btn.count():
                     try:
-                        t = (el.text or "").lower()
+                        t = (btn.first.inner_text(timeout=1500) or "").lower()
                         if "following" in t:
                             return True
-                        el.click()
-                        time.sleep(2)
+                        btn.first.click(timeout=3000)
+                        time.sleep(1.5)
                         return True
                     except Exception:
-                        continue
+                        pass
         except Exception:
             pass
         return False
@@ -494,27 +261,23 @@ class TikTokActor:
                 pass
             if data.get("status_code") in (0, "0") and data.get("is_digg") in (1, True, "1"):
                 return {"ok": True, "action": "like", "target": aweme_id, "reason": "liked", "raw": raw}
-            if "Argus" in str(raw.get("body")):
-                if self._like_ui(aweme_id):
-                    return {"ok": True, "action": "like", "target": aweme_id, "reason": "ui", "raw": raw}
-                return {"ok": False, "action": "like", "reason": "argus", "raw": raw}
-            if self._like_ui(aweme_id):
+            if self._like_ui():
                 return {"ok": True, "action": "like", "target": aweme_id, "reason": "ui", "raw": raw}
-            return {"ok": False, "action": "like", "reason": "fail", "raw": raw}
+            return {"ok": False, "action": "like", "reason": str(data.get("status_msg") or "fail")[:40], "raw": raw}
         except Exception as e:
             return {"ok": False, "action": "like", "error": str(e)}
 
-    def _like_ui(self, aweme_id: str) -> bool:
-        from selenium.webdriver.common.by import By
-        from selenium.webdriver.common.action_chains import ActionChains
+    def _like_ui(self) -> bool:
         try:
-            self.driver.get("https://www.tiktok.com/foryou")
-            time.sleep(3)
-            vids = self.driver.find_elements(By.CSS_SELECTOR, "video")
-            if vids:
-                ActionChains(self.driver).move_to_element(vids[0]).double_click().perform()
-                time.sleep(1.5)
-                return True
+            self.page.goto("https://www.tiktok.com/foryou", wait_until="domcontentloaded", timeout=30000)
+            time.sleep(2)
+            vid = self.page.locator("video").first
+            if vid.count():
+                box = vid.bounding_box()
+                if box:
+                    self.page.mouse.dblclick(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                    time.sleep(1)
+                    return True
         except Exception:
             pass
         return False
@@ -555,7 +318,6 @@ def do_task_action(actor: TikTokActor, job_key: str, task: dict) -> dict:
     if job_key in ("sub", "vip"):
         uid = str(task.get("uid") or "").strip()
         uname = str(task.get("link") or task.get("username") or "").strip().lstrip("@")
-        # link sometimes is username
         if "/" in uname:
             m = re.search(r"@([\w._]+)", uname)
             uname = m.group(1) if m else uname

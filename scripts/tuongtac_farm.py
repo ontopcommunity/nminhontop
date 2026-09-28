@@ -12,11 +12,11 @@ from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 try:
-    from tiktok_actions import get_actor_for_account, do_task_action, PROXY_URL as TT_PROXY
+    from tiktok_actions import get_actor_for_account, do_task_action
     HAS_TT = True
-except Exception:
+except Exception as _e:
     HAS_TT = False
-    TT_PROXY = ""
+    print('tiktok_actions import fail', _e)
 
 # ═══════════════════════ CONFIG ═══════════════════════
 BASE_URL      = "https://tuongtaccheo.com"
