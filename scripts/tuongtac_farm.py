@@ -12,10 +12,11 @@ from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 try:
-    from tiktok_actions import get_actor_for_account, do_task_action
+    from tiktok_actions import get_actor_for_account, do_task_action, PROXY_URL as TT_PROXY
     HAS_TT = True
 except Exception:
     HAS_TT = False
+    TT_PROXY = ""
 
 # ═══════════════════════ CONFIG ═══════════════════════
 BASE_URL      = "https://tuongtaccheo.com"
@@ -535,6 +536,8 @@ def main():
         log_err("Login thất bại – kiểm tra ACCESS_TOKEN")
         return
     log_ok(f"Session OK  {sid[:22]}...")
+    if HAS_TT:
+        log_info(f"Proxy TT: {TT_PROXY or "(direct)"}")
 
     accounts = load_accounts()
     if not accounts:

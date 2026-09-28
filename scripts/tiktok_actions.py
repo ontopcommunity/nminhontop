@@ -16,7 +16,54 @@ from urllib.parse import quote, urlparse
 
 SCRIPT_DIR = Path(__file__).parent
 FULL_JSON = SCRIPT_DIR / "tiktok_full.json"
-PROXY_URL = os.getenv("PROXY_URL", "").strip()  # http://user:pass@ip:port
+BUILTIN_PROXIES = [
+    "http://159.223.167.188:10000",
+    "http://190.97.229.118:999",
+    "http://165.154.162.73:8888",
+    "http://107.167.18.122:443",
+]
+
+def _pick_proxy() -> str:
+    env = os.getenv("PROXY_URL", "").strip()
+    if env:
+        return env
+    try:
+        import requests as rq
+        for px in BUILTIN_PROXIES:
+            try:
+                r = rq.get("https://api.ipify.org?format=json",
+                           proxies={"http": px, "https": px}, timeout=5)
+                if r.status_code == 200:
+                    print("  [proxy] dùng", px, "->", r.text[:50])
+                    return px
+            except Exception:
+                continue
+        try:
+            r = rq.get(
+                "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=2000",
+                timeout=10,
+            )
+            for line in r.text.splitlines()[:30]:
+                line = line.strip()
+                if ":" not in line:
+                    continue
+                px = "http://" + line
+                try:
+                    t = rq.get("https://api.ipify.org?format=json",
+                               proxies={"http": px, "https": px}, timeout=4)
+                    if t.status_code == 200:
+                        print("  [proxy] scrape", px, "->", t.text[:50])
+                        return px
+                except Exception:
+                    continue
+        except Exception:
+            pass
+    except Exception:
+        pass
+    print("  [proxy] không có proxy sống – chạy direct")
+    return ""
+
+PROXY_URL = _pick_proxy()
 
 _lock = threading.Lock()
 _map = None
