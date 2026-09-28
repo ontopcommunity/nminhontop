@@ -16,6 +16,12 @@ from urllib.parse import quote, urlparse
 
 SCRIPT_DIR = Path(__file__).parent
 FULL_JSON = SCRIPT_DIR / "tiktok_full.json"
+# ═══ PROXY RESIDENTIAL ═══
+# PROXY_URL=http://user:pass@host:port   (ưu tiên – residential)
+# PROXY_LIST=scripts/proxies.txt         (mỗi dòng 1 proxy)
+# PROXY_FORCE=1                          (bắt buộc proxy, không fallback direct)
+# Không set gì → thử free (yếu), rồi direct
+
 BUILTIN_PROXIES = [
     "http://159.223.167.188:10000",
     "http://190.97.229.118:999",
@@ -23,93 +29,166 @@ BUILTIN_PROXIES = [
     "http://107.167.18.122:443",
 ]
 
-def _pick_proxy() -> str:
+def _parse_proxy(url: str):
+    """Trả (server_no_auth, username, password) hoặc (None,None,None)."""
+    url = (url or "").strip()
+    if not url:
+        return None, None, None
+    if "://" not in url:
+        url = "http://" + url
+    u = urlparse(url)
+    if not u.hostname:
+        return None, None, None
+    port = u.port or (443 if u.scheme == "https" else 80)
+    server = "%s://%s:%s" % (u.scheme or "http", u.hostname, port)
+    return server, u.username, u.password
+
+
+def _load_proxy_candidates():
+    cands = []
     env = os.getenv("PROXY_URL", "").strip()
     if env:
-        return env
-    try:
-        import requests as rq
-        for px in BUILTIN_PROXIES:
-            try:
-                r = rq.get("https://api.ipify.org?format=json",
-                           proxies={"http": px, "https": px}, timeout=5)
-                if r.status_code == 200:
-                    print("  [proxy] dùng", px, "->", r.text[:50])
-                    return px
-            except Exception:
-                continue
-        try:
-            r = rq.get(
-                "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=2000",
-                timeout=10,
-            )
-            for line in r.text.splitlines()[:30]:
-                line = line.strip()
-                if ":" not in line:
-                    continue
-                px = "http://" + line
-                try:
-                    t = rq.get("https://api.ipify.org?format=json",
-                               proxies={"http": px, "https": px}, timeout=4)
-                    if t.status_code == 200:
-                        print("  [proxy] scrape", px, "->", t.text[:50])
-                        return px
-                except Exception:
-                    continue
-        except Exception:
-            pass
-    except Exception:
-        pass
-    print("  [proxy] không có proxy sống – chạy direct")
-    return ""
-
-PROXY_URL = _pick_proxy()
-
-_lock = threading.Lock()
-_map = None
-
-
-def _load():
-    global _map
-    if _map is not None:
-        return _map
-    _map = {}
-    if FULL_JSON.exists():
-        for a in json.loads(FULL_JSON.read_text()):
-            for k in (a.get("tt_uid"), a.get("sessionid"), a.get("username"), a.get("user_field")):
-                if k:
-                    _map[str(k)] = a
-    return _map
-
-
-def _cookies(s: str):
+        cands.append(env)
+    list_path = os.getenv("PROXY_LIST", "").strip()
+    if not list_path:
+        # mặc định file trong scripts/
+        lp = SCRIPT_DIR / "proxies.txt"
+        if lp.exists():
+            list_path = str(lp)
+    if list_path and Path(list_path).exists():
+        for line in Path(list_path).read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                if "://" not in line and line.count(":") >= 3:
+                    # user:pass@host:port or host:port:user:pass
+                    if "@" in line:
+                        cands.append("http://" + line)
+                    else:
+                        parts = line.split(":")
+                        if len(parts) == 4:
+                            # host:port:user:pass
+                            cands.append("http://%s:%s@%s:%s" % (parts[2], parts[3], parts[0], parts[1]))
+                        else:
+                            cands.append("http://" + line)
+                else:
+                    cands.append(line if "://" in line else "http://" + line)
+    # free chỉ khi không có residential config
+    if not env and not (list_path and Path(list_path).exists() if list_path else False):
+        cands.extend(BUILTIN_PROXIES)
+    # unique preserve order
+    seen = set()
     out = []
-    for part in s.split(";"):
-        part = part.strip()
-        if "=" not in part:
-            continue
-        k, v = part.split("=", 1)
-        out.append({"name": k.strip(), "value": v.strip(), "domain": ".tiktok.com", "path": "/"})
+    for c in cands:
+        if c not in seen:
+            seen.add(c)
+            out.append(c)
     return out
 
 
+def _test_proxy(px: str, timeout: float = 8) -> bool:
+    """Health-check: HTTP qua proxy tới ipify (nhanh). Residential nên pass."""
+    try:
+        import requests as rq
+        r = rq.get(
+            "https://api.ipify.org?format=json",
+            proxies={"http": px, "https": px},
+            timeout=timeout,
+        )
+        return r.status_code == 200 and bool(r.text)
+    except Exception:
+        return False
+
+
+def _pick_proxy() -> str:
+    force = os.getenv("PROXY_FORCE", "").strip() in ("1", "true", "yes")
+    cands = _load_proxy_candidates()
+    if not cands:
+        print("  [proxy] không cấu hình – direct")
+        return ""
+    for px in cands:
+        server, user, pw = _parse_proxy(px)
+        label = server or px
+        if user:
+            label = label.replace("://", "://***:***@") if "://" in label else label
+            # reconstruct display without password
+            u = urlparse(px if "://" in px else "http://" + px)
+            label = "%s://%s:***@%s:%s" % (u.scheme, u.username, u.hostname, u.port)
+        print("  [proxy] test", label, "...", end=" ", flush=True)
+        # build test URL with auth embedded
+        test_url = px if "://" in px else "http://" + px
+        if _test_proxy(test_url):
+            print("OK")
+            return test_url
+        print("FAIL")
+    if force:
+        print("  [proxy] PROXY_FORCE=1 nhưng không proxy nào sống")
+        return cands[0]  # vẫn dùng cái đầu
+    print("  [proxy] không proxy sống – direct (set PROXY_URL residential để ổn định)")
+    return ""
+
+
+PROXY_URL = _pick_proxy()
+PROXY_FORCE = os.getenv("PROXY_FORCE", "").strip() in ("1", "true", "yes")
+
+
+def _make_proxy_extension(server: str, username: str, password: str) -> str:
+    """Chrome extension tạm để auth proxy (residential user:pass)."""
+    import tempfile, zipfile
+    u = urlparse(server)
+    host = u.hostname or ""
+    port = u.port or 80
+    scheme = u.scheme or "http"
+    manifest = """{
+  "version": "1.0.0",
+  "manifest_version": 2,
+  "name": "ONTOP Proxy Auth",
+  "permissions": ["proxy", "tabs", "unlimitedStorage", "storage", "<all_urls>", "webRequest", "webRequestBlocking"],
+  "background": {"scripts": ["background.js"]},
+  "minimum_chrome_version": "22.0.0"
+}"""
+    background = """
+var config = {
+    mode: "fixed_servers",
+    rules: {
+      singleProxy: { scheme: "%s", host: "%s", port: %d },
+      bypassList: ["localhost", "127.0.0.1"]
+    }
+};
+chrome.proxy.settings.set({value: config, scope: "regular"}, function() {});
+function callbackFn(details) {
+    return { authCredentials: { username: "%s", password: "%s" } };
+}
+chrome.webRequest.onAuthRequired.addListener(
+    callbackFn,
+    {urls: ["<all_urls>"]},
+    ['blocking']
+);
+""" % (scheme, host, int(port), username.replace('"', '\\"'), password.replace('"', '\\"'))
+    tmp = tempfile.mkdtemp(prefix="tt_proxy_")
+    ext = os.path.join(tmp, "proxy_auth_ext.zip")
+    with zipfile.ZipFile(ext, "w") as zf:
+        zf.writestr("manifest.json", manifest)
+        zf.writestr("background.js", background)
+    return ext
+
+
 def _proxy_args():
-    """Chrome proxy args from PROXY_URL"""
+    """Chrome args + optional auth extension path."""
     if not PROXY_URL:
         return [], None
-    # selenium wire style not needed — chrome --proxy-server
-    # auth proxies need extension; plain host:port works with --proxy-server
-    u = urlparse(PROXY_URL)
-    if u.username and u.password:
-        # return proxy dict for requests; chrome auth needs extension
-        server = f"{u.scheme or 'http'}://{u.hostname}:{u.port}"
-        return [f"--proxy-server={server}"], (u.username, u.password)
-    server = PROXY_URL if "://" in PROXY_URL else f"http://{PROXY_URL}"
-    return [f"--proxy-server={server}"], None
+    server, user, password = _parse_proxy(PROXY_URL)
+    if not server:
+        return [], None
+    if user and password:
+        ext = _make_proxy_extension(server, user, password)
+        return [], ext  # extension handles proxy; no --proxy-server
+    return ["--proxy-server=%s" % server], None
 
 
 def _make_driver(use_proxy: bool = True):
-    proxy_args, _auth = _proxy_args() if use_proxy else ([], None)
+    proxy_args, proxy_ext = ([], None)
+    if use_proxy and PROXY_URL:
+        proxy_args, proxy_ext = _proxy_args()
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
     o = Options()
@@ -123,6 +202,8 @@ def _make_driver(use_proxy: bool = True):
     o.page_load_strategy = "eager"
     for a in proxy_args:
         o.add_argument(a)
+    if proxy_ext:
+        o.add_extension(proxy_ext)
     o.binary_location = "/usr/bin/google-chrome"
     try:
         import undetected_chromedriver as uc
@@ -135,11 +216,13 @@ def _make_driver(use_proxy: bool = True):
         uo.page_load_strategy = "eager"
         for a in proxy_args:
             uo.add_argument(a)
+        if proxy_ext:
+            uo.add_extension(proxy_ext)
         d = uc.Chrome(options=uo, headless=True, use_subprocess=True)
     except Exception:
         d = webdriver.Chrome(options=o)
-    d.set_page_load_timeout(25)
-    d.set_script_timeout(30)
+    d.set_page_load_timeout(35 if use_proxy else 25)
+    d.set_script_timeout(35)
     return d
 
 
@@ -175,14 +258,17 @@ class TikTokActor:
         with _lock:
             last_err = None
             # Thử proxy trước, fail thì direct
-            for use_proxy in (True, False):
+            modes = [True]
+            if not PROXY_FORCE:
+                modes.append(False)  # fallback direct khi không FORCE
+            for use_proxy in modes:
                 try:
                     self.driver = _make_driver(use_proxy=use_proxy and bool(PROXY_URL))
                     self._boot()
-                    if not use_proxy or not PROXY_URL:
-                        print("  [chrome] boot direct OK")
-                    else:
+                    if use_proxy and PROXY_URL:
                         print("  [chrome] boot proxy OK")
+                    else:
+                        print("  [chrome] boot direct OK")
                     return self
                 except Exception as e:
                     last_err = e

@@ -1,0 +1,5 @@
+# Proxy residential – mỗi dòng 1 proxy
+# http://user:pass@host:port
+# user:pass@host:port
+# host:port:user:pass
+# http://gate.iproyal.com:12321  (nếu không auth)
