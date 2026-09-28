@@ -130,6 +130,38 @@ def _pick_proxy() -> str:
 PROXY_URL = _pick_proxy()
 PROXY_FORCE = os.getenv("PROXY_FORCE", "").strip() in ("1", "true", "yes")
 
+_lock = threading.Lock()
+_map = None
+
+
+def _load():
+    """Load account cookies map from tiktok_full.json"""
+    global _map
+    if _map is not None:
+        return _map
+    _map = {}
+    if FULL_JSON.exists():
+        try:
+            for a in json.loads(FULL_JSON.read_text()):
+                for k in (a.get("tt_uid"), a.get("sessionid"), a.get("username"), a.get("user_field")):
+                    if k:
+                        _map[str(k)] = a
+        except Exception as e:
+            print("  [warn] load tiktok_full.json:", e)
+    return _map
+
+
+def _cookies(s: str):
+    out = []
+    for part in (s or "").split(";"):
+        part = part.strip()
+        if "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        out.append({"name": k.strip(), "value": v.strip(), "domain": ".tiktok.com", "path": "/"})
+    return out
+
+
 
 def _make_proxy_extension(server: str, username: str, password: str) -> str:
     """Chrome extension tạm để auth proxy (residential user:pass)."""
