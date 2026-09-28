@@ -55,16 +55,23 @@ def _parse_ok(body: str):
         return False, "not_json"
     sc = data.get("status_code")
     msg = str(data.get("status_msg") or "")
-    if sc in (0, "0"):
-        return True, "ok"
     if sc in (8, "8") or "expired" in msg.lower():
         return False, "login_expired"
     if sc in (10402, "10402") or "csrf" in msg.lower():
         return False, "bad_csrf"
-    if data.get("follow_status") in (1, 2):
-        return True, "already_following"
+    # Follow thật: follow_status 1=following, 2=requested
+    fs = data.get("follow_status")
+    if fs in (1, 2):
+        return True, "followed_%s" % fs
     if data.get("is_digg") in (1, True):
-        return True, "already_liked"
+        return True, "liked"
+    # status_code=0 nhưng follow_status=0 => chưa follow thật
+    if sc in (0, "0"):
+        if "follow_status" in data and fs in (0, "0", None):
+            return False, "not_actually_following"
+        if "follow_status" not in data and "is_digg" not in data:
+            return True, "ok_generic"
+        return False, "status0_no_effect"
     return False, "code=%s:%s" % (sc, msg[:40])
 
 
@@ -137,36 +144,41 @@ class TikTokActor:
             self._boot()
 
     def _api(self, path_with_query: str, body: str) -> dict:
+        # Method đã verify status_code=0 trước đây
         script = """
             const done = arguments[arguments.length-1];
             const path = arguments[0];
             const body = arguments[1];
             (async () => {
               try {
+                // secsdk head
                 let ware = '';
                 try {
-                  const h = await fetch(path.split('?')[0] + '?aid=1988', {
+                  const h = await fetch('https://www.tiktok.com/api/commit/follow/user/?aid=1988', {
                     method: 'HEAD', credentials: 'include',
                     headers: {
                       'x-secsdk-csrf-request': '1',
                       'x-secsdk-csrf-version': '1.2.5'
                     }
                   });
-                  ware = h.headers.get('x-ware-csrf-token') || h.headers.get('X-Ware-Csrf-Token') || '';
-                  if (ware.includes(',')) ware = ware.split(',')[1] || ware.split(',')[0];
+                  const raw = h.headers.get('x-ware-csrf-token') || '';
+                  // format: "0,TOKEN" or "1,TOKEN"
+                  const parts = raw.split(',');
+                  ware = (parts.length > 1 ? parts[1] : parts[0] || '').trim();
                 } catch(e) {}
-                const csrf = (document.cookie.split(';').map(s=>s.trim())
+                let csrf = (document.cookie.split(';').map(s=>s.trim())
                   .find(s=>s.startsWith('tt_csrf_token='))||'=').split('=').slice(1).join('=');
                 const headers = {
                   'Content-Type': 'application/x-www-form-urlencoded',
-                  'x-tt-csrf-token': csrf
+                  'x-tt-csrf-token': csrf,
+                  'tt-csrf-token': csrf
                 };
-                if (ware) headers['x-secsdk-csrf-token'] = ware.trim();
+                if (ware) headers['x-secsdk-csrf-token'] = ware;
                 const r = await fetch(path, {
                   method: 'POST', credentials: 'include', headers, body
                 });
                 const t = await r.text();
-                done({status: r.status, body: (t||'').slice(0, 700)});
+                done({status: r.status, body: (t||'').slice(0, 700), csrf: csrf.slice(0,12), ware: (ware||'').slice(0,20)});
               } catch(e) {
                 done({error: String(e)});
               }
