@@ -391,10 +391,10 @@ module.exports = async function handler(req, res) {
           "/balance\n" +
           "/cancel order\n" +
           "/boost order\n\n" +
-          "AI (Grok)\n" +
-          "Bot ơi {câu hỏi} — chat AI\n" +
+          "AI (Gemini)\n" +
+          "Bot ơi {câu hỏi} — chat AI (Gemini)\n" +
           "Ảnh/file ≤5MB kèm caption Bot ơi\n\n" +
-          "Env Vercel: XAI_API_KEY, API_BASE,\n" +
+          "Env Vercel: GEMINI_API_KEY, API_BASE,\n" +
           "ACCESS_TOKEN, API_KEY, ZALO_SECRET_TOKEN\n" +
           "━━━━━━━━━━━━━━━━"
       );

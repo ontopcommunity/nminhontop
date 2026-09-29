@@ -1,15 +1,57 @@
 {
   "version": 2,
   "builds": [
-    { "src": "api/webhook.js", "use": "@vercel/node" },
-    { "src": "api/watch.js", "use": "@vercel/node" },
-    { "src": "api/bot.js", "use": "@vercel/node" },
-    { "src": "api/tiktok.js", "use": "@vercel/node" }
+    {
+      "src": "api/webhook.js",
+      "use": "@vercel/node"
+    },
+    {
+      "src": "api/watch.js",
+      "use": "@vercel/node"
+    },
+    {
+      "src": "api/bot.js",
+      "use": "@vercel/node"
+    },
+    {
+      "src": "api/tiktok.js",
+      "use": "@vercel/node"
+    },
+    {
+      "src": "api/cron.js",
+      "use": "@vercel/node"
+    }
   ],
   "routes": [
-    { "src": "/webhook", "dest": "/api/webhook.js" },
-    { "src": "/api/webhook", "dest": "/api/webhook.js" },
-    { "src": "/tiktok", "dest": "/api/watch.js" },
-    { "src": "/api/watch", "dest": "/api/watch.js" }
+    {
+      "src": "/webhook",
+      "dest": "/api/webhook.js"
+    },
+    {
+      "src": "/api/webhook",
+      "dest": "/api/webhook.js"
+    },
+    {
+      "src": "/tiktok",
+      "dest": "/api/watch.js"
+    },
+    {
+      "src": "/api/watch",
+      "dest": "/api/watch.js"
+    },
+    {
+      "src": "/api/cron",
+      "dest": "/api/cron.js"
+    },
+    {
+      "src": "/cron",
+      "dest": "/api/cron.js"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron",
+      "schedule": "0 */6 * * *"
+    }
   ]
 }
