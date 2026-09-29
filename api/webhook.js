@@ -27,6 +27,7 @@ const {
   doBoost,
   loginSession,
 } = require("./smm");
+const { isWake, stripWake, chatGrok } = require("./grok");
 
 const DEMO_PHOTO = "https://placehold.co/600x400/png?text=Zalo+Bot+Ontop";
 
@@ -365,6 +366,7 @@ module.exports = async function handler(req, res) {
           "▸ /cancel {order}\n" +
           "▸ /boost {order}\n\n" +
           "▸ /help\n" +
+          "▸ Bot ơi {hỏi gì đó} — AI Grok\n" +
           "━━━━━━━━━━━━━━━━"
       );
     } else if (lower === "/photo" || lower === "photo") {
@@ -389,11 +391,11 @@ module.exports = async function handler(req, res) {
           "/balance\n" +
           "/cancel order\n" +
           "/boost order\n\n" +
-          "Env cần set trên Vercel:\n" +
-          "API_BASE\n" +
-          "ACCESS_TOKEN + API_KEY\n" +
-          "PHPSESSID (optional)\n" +
-          "FLARESOLVERR_URL (bypass CF)\n" +
+          "AI (Grok)\n" +
+          "Bot ơi {câu hỏi} — chat AI\n" +
+          "Ảnh/file ≤5MB kèm caption Bot ơi\n\n" +
+          "Env Vercel: XAI_API_KEY, API_BASE,\n" +
+          "ACCESS_TOKEN, API_KEY, ZALO_SECRET_TOKEN\n" +
           "━━━━━━━━━━━━━━━━"
       );
     } else if (lower === "/keyboard") {
@@ -410,10 +412,49 @@ module.exports = async function handler(req, res) {
     } else if (lower === "/hidekb" || lower === "ẩn bàn phím" || lower === "ẩn") {
       await deleteChatKeyboard(chatId);
       await sendMessage(chatId, "✦ Đã ẩn bàn phím");
+    } else if (text && isWake(text)) {
+      // ========== GROK AI – chỉ khi gọi "Bot ơi" ==========
+      const prompt = stripWake(text);
+      let waitId = null;
+      try {
+        waitId = await sendWaiting(chatId, "⏳ Đang nghĩ...");
+        await sendChatAction(chatId, "typing").catch(() => {});
+        // Ảnh kèm caption "Bot ơi ..." (nếu platform gửi photo url)
+        let imageUrl = null;
+        if (message.photo) {
+          const ph = Array.isArray(message.photo) ? message.photo[message.photo.length - 1] : message.photo;
+          imageUrl = ph?.file_url || ph?.url || message.photo_url || null;
+        }
+        if (!imageUrl && message.document) {
+          const sz = message.document.file_size || 0;
+          if (sz && sz > 5 * 1024 * 1024) {
+            await clearWaiting(chatId, waitId);
+            await sendMessage(chatId, "✖ File vượt 5MB, gửi file nhỏ hơn nhé.");
+            return res.status(200).json({ ok: true });
+          }
+          imageUrl = message.document.file_url || message.document.url || null;
+        }
+        const reply = await chatGrok(chatId, prompt || "Chào bạn", { imageUrl });
+        await clearWaiting(chatId, waitId);
+        // Cắt tin dài thành nhiều đoạn nếu cần
+        const chunks = [];
+        let s = reply;
+        while (s.length > 3500) {
+          chunks.push(s.slice(0, 3500));
+          s = s.slice(3500);
+        }
+        chunks.push(s);
+        for (const c of chunks) {
+          await sendMessage(chatId, c);
+        }
+      } catch (e) {
+        await clearWaiting(chatId, waitId);
+        await sendMessage(chatId, `✖ Grok lỗi: ${e.message}`);
+      }
     } else if (text) {
-      await sendMessage(chatId, `▸ ${text}\nGõ /help để xem lệnh.`);
+      await sendMessage(chatId, `▸ ${text}\nGõ /help xem lệnh.\nGọi AI: *Bot ơi* + câu hỏi`);
     } else {
-      await sendMessage(chatId, "✦ Đã nhận tin nhắn.");
+      await sendMessage(chatId, "✦ Đã nhận tin nhắn.\nGọi AI: Bot ơi ...");
     }
 
     return res.status(200).json({ ok: true });
