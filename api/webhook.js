@@ -421,20 +421,25 @@ module.exports = async function handler(req, res) {
         await sendChatAction(chatId, "typing").catch(() => {});
         // Ảnh kèm caption "Bot ơi ..." (nếu platform gửi photo url)
         let imageUrl = null;
+        let fileUrl = null;
+        let fileName = null;
         if (message.photo) {
           const ph = Array.isArray(message.photo) ? message.photo[message.photo.length - 1] : message.photo;
           imageUrl = ph?.file_url || ph?.url || message.photo_url || null;
         }
-        if (!imageUrl && message.document) {
+        if (message.document) {
           const sz = message.document.file_size || 0;
           if (sz && sz > 5 * 1024 * 1024) {
             await clearWaiting(chatId, waitId);
             await sendMessage(chatId, "✖ File vượt 5MB, gửi file nhỏ hơn nhé.");
             return res.status(200).json({ ok: true });
           }
-          imageUrl = message.document.file_url || message.document.url || null;
+          fileUrl = message.document.file_url || message.document.url || null;
+          fileName = message.document.file_name || message.document.name || "file";
+          const mt = (message.document.mime_type || "").toLowerCase();
+          if (!imageUrl && mt.startsWith("image/")) imageUrl = fileUrl;
         }
-        const reply = await chatGrok(chatId, prompt || "Chào bạn", { imageUrl });
+        const reply = await chatGrok(chatId, prompt || "Chào bạn", { imageUrl, fileUrl, fileName });
         await clearWaiting(chatId, waitId);
         // Cắt tin dài thành nhiều đoạn nếu cần
         const chunks = [];
