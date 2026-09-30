@@ -417,7 +417,7 @@ module.exports = async function handler(req, res) {
       const prompt = stripWake(text);
       let waitId = null;
       try {
-        waitId = await sendWaiting(chatId, "⏳ Đang nghĩ...");
+        waitId = await sendWaiting(chatId, "⏳ ⏳ Gemini đang trả lời...");
         await sendChatAction(chatId, "typing").catch(() => {});
         // Ảnh kèm caption "Bot ơi ..." (nếu platform gửi photo url)
         let imageUrl = null;
@@ -454,7 +454,7 @@ module.exports = async function handler(req, res) {
         }
       } catch (e) {
         await clearWaiting(chatId, waitId);
-        await sendMessage(chatId, `✖ Grok lỗi: ${e.message}`);
+        await sendMessage(chatId, `✖ AI (Gemini) lỗi: ${e.message}`);
       }
     } else if (text) {
       await sendMessage(chatId, `▸ ${text}\nGõ /help xem lệnh.\nGọi AI: *Bot ơi* + câu hỏi`);

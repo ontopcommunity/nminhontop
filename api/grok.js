@@ -1,17 +1,19 @@
 /**
- * AI chat cho Zalo – Gemini free (mặc định) / xAI nếu AI_PROVIDER=xai
+ * AI Zalo bot – CHỈ Google Gemini (free)
  * Wake: "Bot ơi ..."
- * Env: GEMINI_API_KEY, GEMINI_MODEL, AI_PROVIDER, XAI_API_KEY (optional)
+ * Env bắt buộc: GEMINI_API_KEY
+ * Env optional: GEMINI_MODEL (mặc định gemini-3.5-flash)
  */
 
 const MAX_BYTES = 5 * 1024 * 1024;
 const history = new Map();
 const MAX_TURNS = 10;
 
-const SYSTEM = `Bạn là trợ lý AI thông minh trên Zalo bot ONTOP (powered by Google Gemini).
-Chat tiếng Việt tự nhiên như người thật. Phân tích link/ảnh/file khi có dữ liệu kèm.
-Không tiết lộ API key. Không giả lệnh bot (/tiktok, /login...).
-Nếu thiếu dữ liệu thì nói rõ.`;
+const SYSTEM = `Bạn là trợ lý AI trên Zalo bot ONTOP, dùng Google Gemini.
+Trả lời tiếng Việt tự nhiên, rõ ràng như chat thật.
+Có thể phân tích link/ảnh/file khi hệ thống kèm dữ liệu.
+Không tiết lộ API key. Không giả các lệnh bot (/tiktok, /login, ...).
+Không tự xưng là Grok hay xAI.`;
 
 function isWake(text) {
   if (!text || typeof text !== "string") return false;
@@ -82,9 +84,14 @@ async function bufferToBase64(url) {
   return { mime: ct, data: buf.toString("base64"), size: buf.length };
 }
 
+/**
+ * Gọi Gemini – export chính
+ */
 async function chatGemini(chatId, userText, opts = {}) {
   const key = (process.env.GEMINI_API_KEY || "").trim();
-  if (!key) throw new Error("Thiếu GEMINI_API_KEY");
+  if (!key) {
+    throw new Error("Thiếu GEMINI_API_KEY trên Vercel. Vào Project → Settings → Environment Variables.");
+  }
 
   const model = (process.env.GEMINI_MODEL || "gemini-3.5-flash").trim();
   let text = (userText || "").trim();
@@ -103,7 +110,9 @@ async function chatGemini(chatId, userText, opts = {}) {
       const buf = Buffer.from(await r.arrayBuffer());
       if (buf.length <= MAX_BYTES) {
         extra += `\n\n--- FILE ${opts.fileName || "file"} (${buf.length}B) ---\n${buf.toString("utf8").slice(0, 10000)}`;
-      } else extra += "\n\n[File vượt 5MB]";
+      } else {
+        extra += "\n\n[File vượt 5MB]";
+      }
     } catch (e) {
       extra += `\n\n[Lỗi đọc file: ${e.message}]`;
     }
@@ -119,7 +128,6 @@ async function chatGemini(chatId, userText, opts = {}) {
     }
   }
 
-  // Gemini history: user/model alternating
   const contents = [];
   for (const m of getHistory(chatId)) {
     contents.push({
@@ -129,8 +137,11 @@ async function chatGemini(chatId, userText, opts = {}) {
   }
   contents.push({ role: "user", parts });
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
-  const res = await fetch(url, {
+  const apiUrl =
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent` +
+    `?key=${encodeURIComponent(key)}`;
+
+  const res = await fetch(apiUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -139,96 +150,51 @@ async function chatGemini(chatId, userText, opts = {}) {
       generationConfig: { temperature: 0.7, maxOutputTokens: 2048 },
     }),
   });
+
   const raw = await res.text();
   let data;
   try {
     data = JSON.parse(raw);
   } catch {
-    throw new Error("Gemini non-JSON: " + raw.slice(0, 200));
+    throw new Error("Gemini trả về không phải JSON: " + raw.slice(0, 200));
   }
   if (!res.ok) {
-    const msg = data?.error?.message || raw.slice(0, 240);
+    const msg = data?.error?.message || raw.slice(0, 280);
     throw new Error(`Gemini ${res.status}: ${msg}`);
   }
 
   const reply =
-    data?.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") ||
-    "(không có nội dung)";
+    data?.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("")?.trim() ||
+    "(Gemini không trả nội dung – thử lại)";
 
   pushHistory(chatId, "user", text + (opts.imageUrl ? " [ảnh]" : "") + (urls.length ? " [link]" : ""));
   pushHistory(chatId, "assistant", reply);
   return String(reply).slice(0, 3800);
 }
 
-async function chatXai(chatId, userText, opts = {}) {
-  const key = (process.env.XAI_API_KEY || "").trim();
-  if (!key) throw new Error("Thiếu XAI_API_KEY");
-  const model = process.env.XAI_MODEL || "grok-3";
-  let text = (userText || "").trim() || "Xin chào";
-  const urls = extractUrls(text);
-  let extra = "";
-  for (const u of urls) extra += "\n\n" + (await fetchPageText(u));
-  const full = text + extra;
-  const userContent = opts.imageUrl
-    ? [
-        { type: "text", text: full },
-        { type: "image_url", image_url: { url: opts.imageUrl } },
-      ]
-    : full;
-  const messages = [
-    { role: "system", content: SYSTEM },
-    ...getHistory(chatId).map((m) => ({ role: m.role, content: m.content })),
-    { role: "user", content: userContent },
-  ];
-  const res = await fetch("https://api.x.ai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${key}`,
-    },
-    body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 2000 }),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data?.error?.message || JSON.stringify(data).slice(0, 200));
-  const reply = data?.choices?.[0]?.message?.content || "(empty)";
-  pushHistory(chatId, "user", text);
-  pushHistory(chatId, "assistant", reply);
-  return String(reply).slice(0, 3800);
-}
-
+/** Alias cũ – webhook vẫn require chatGrok */
 async function chatGrok(chatId, userText, opts = {}) {
-  const provider = (process.env.AI_PROVIDER || "gemini").toLowerCase();
-  if (provider === "xai" || provider === "grok") {
-    return chatXai(chatId, userText, opts);
-  }
   return chatGemini(chatId, userText, opts);
 }
 
-/** Báo cáo trạng thái bot (cron / health) */
 function statusReport() {
-  const provider = process.env.AI_PROVIDER || "gemini";
-  const model =
-    provider === "xai" || provider === "grok"
-      ? process.env.XAI_MODEL || "grok-3"
-      : process.env.GEMINI_MODEL || "gemini-3.5-flash";
-  const hasKey =
-    provider === "xai" || provider === "grok"
-      ? !!(process.env.XAI_API_KEY || "").trim()
-      : !!(process.env.GEMINI_API_KEY || "").trim();
+  const model = process.env.GEMINI_MODEL || "gemini-3.5-flash";
+  const hasKey = !!(process.env.GEMINI_API_KEY || "").trim();
   const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
   return (
-    `🤖 ONTOP Bot — báo cáo định kỳ\n` +
+    `🤖 ONTOP Bot — báo cáo\n` +
     `⏰ ${now}\n` +
-    `🧠 AI: ${provider} / ${model}\n` +
-    `🔑 Key: ${hasKey ? "OK" : "THIẾU"}\n` +
+    `🧠 AI: Google Gemini / ${model}\n` +
+    `🔑 GEMINI_API_KEY: ${hasKey ? "OK" : "THIẾU"}\n` +
     `💬 Gọi AI: Bot ơi {câu hỏi}\n` +
-    `📎 Ảnh/file ≤5MB · phân tích link tự động`
+    `📎 Link · ảnh/file ≤5MB`
   );
 }
 
 module.exports = {
   isWake,
   stripWake,
+  chatGemini,
   chatGrok,
   statusReport,
   MAX_PHOTO: MAX_BYTES,
