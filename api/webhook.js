@@ -366,7 +366,7 @@ module.exports = async function handler(req, res) {
           "▸ /cancel {order}\n" +
           "▸ /boost {order}\n\n" +
           "▸ /help\n" +
-          "▸ Bot ơi {hỏi gì đó} — AI Grok\n" +
+          "▸ Bot ơi {hỏi gì đó} — AI Gemini\n" +
           "━━━━━━━━━━━━━━━━"
       );
     } else if (lower === "/photo" || lower === "photo") {
@@ -413,11 +413,11 @@ module.exports = async function handler(req, res) {
       await deleteChatKeyboard(chatId);
       await sendMessage(chatId, "✦ Đã ẩn bàn phím");
     } else if (text && isWake(text)) {
-      // ========== GROK AI – chỉ khi gọi "Bot ơi" ==========
+      // ========== GEMINI AI – chỉ khi gọi "Bot ơi" ==========
       const prompt = stripWake(text);
       let waitId = null;
       try {
-        waitId = await sendWaiting(chatId, "⏳ ⏳ Gemini đang trả lời...");
+        waitId = await sendWaiting(chatId, "⏳ Gemini đang trả lời...");
         await sendChatAction(chatId, "typing").catch(() => {});
         // Ảnh kèm caption "Bot ơi ..." (nếu platform gửi photo url)
         let imageUrl = null;
