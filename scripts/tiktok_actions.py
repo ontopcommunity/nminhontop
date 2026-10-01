@@ -211,6 +211,63 @@ class TikTokActor:
 
         return {"ok": True, "action": "follow", "reason": "ui_clicked", "ui": True, "engine": self.engine}
 
+
+    def verify_follow(self, username: str = "") -> dict:
+        """Check đã follow chưa: Following / Message / hết nút Follow."""
+        username = (username or "").strip().lstrip("@")
+        if username:
+            try:
+                self.driver.get("https://www.tiktok.com/@%s" % username)
+                time.sleep(2.2 + random.random())
+            except Exception as e:
+                return {"followed": False, "detail": "nav:" + str(e)[:40]}
+        try:
+            from selenium.webdriver.common.by import By
+            # 1) follow-button text
+            btns = self.driver.find_elements(By.XPATH, '//button[@data-e2e="follow-button"]')
+            for b in btns[:5]:
+                txt = (b.text or "").strip().lower()
+                if any(x in txt for x in ("following", "requested", "đang follow", "đã follow", "friends", "bạn bè")):
+                    return {"followed": True, "detail": txt or "following"}
+                if txt in ("follow", "theo dõi") or txt.startswith("follow"):
+                    return {"followed": False, "detail": txt or "follow"}
+            # 2) nút Message thường chỉ hiện khi đã follow / bạn
+            msg = self.driver.find_elements(By.XPATH,
+                '//button[@data-e2e="message-button"]|//button[contains(.,"Message")]|//button[contains(.,"Nhắn tin")]')
+            if msg and not btns:
+                return {"followed": True, "detail": "message_btn"}
+            # 3) không còn Follow + có following trong DOM
+            html = (self.driver.page_source or "").lower()
+            if "data-e2e="follow-button"" not in html:
+                if "following" in html or "đang follow" in html:
+                    return {"followed": True, "detail": "no_follow_btn"}
+            if btns:
+                t0 = (btns[0].text or "").strip().lower()
+                return {"followed": False, "detail": t0 or "btn_unknown"}
+            return {"followed": False, "detail": "unknown"}
+        except Exception as e:
+            return {"followed": False, "detail": str(e)[:40]}
+
+    def verify_like(self, aweme_id: str = "") -> dict:
+        """Ước lượng đã tim: class liked / aria."""
+        try:
+            from selenium.webdriver.common.by import By
+            for sel in (
+                '//*[@data-e2e="like-icon" and contains(@class,"liked")]',
+                '//*[@data-e2e="browse-like-icon" and contains(@class,"liked")]',
+                '//button[contains(@aria-label,"Unlike") or contains(@aria-label,"Bỏ thích")]',
+            ):
+                els = self.driver.find_elements(By.XPATH, sel)
+                if els:
+                    return {"liked": True, "detail": "liked_ui"}
+            return {"liked": False, "detail": "not_liked"}
+        except Exception as e:
+            return {"liked": False, "detail": str(e)[:40]}
+
+    def verify_comment(self) -> dict:
+        """Comment khó verify chắc — coi OK nếu không lỗi post."""
+        return {"commented": True, "detail": "assumed_ok"}
+
     def like(self, aweme_id: str) -> dict:
         aweme_id = str(aweme_id).strip()
         if not aweme_id:

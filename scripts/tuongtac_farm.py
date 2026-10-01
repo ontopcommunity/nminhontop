@@ -416,7 +416,7 @@ def farm_one(sid, st: AccState, mode: str):
             continue
 
         # Đã nhận nhiệm vụ → quyết hoàn thành, không miss oan
-        batch = tasks[:2]
+        batch = list(tasks)  # full getpost, xong hết mới get tiếp
         ok_ids = []
         done_tt = 0
         actor = None
@@ -488,10 +488,56 @@ def farm_one(sid, st: AccState, mode: str):
                     actor = None
                 time.sleep(1.5 + attempt * 0.5)
 
-            if success:
+            # --- Verify theo mode ---
+            verified = success
+            vdetail = ""
+            if success and actor and HAS_TT:
+                try:
+                    if job_key in ("sub", "vip"):
+                        uname = str(t.get("link") or t.get("username") or "").strip().lstrip("@")
+                        if "/" in uname:
+                            import re as _re
+                            mm = _re.search(r"@([\w._]+)", uname)
+                            uname = mm.group(1) if mm else uname
+                        vr = actor.verify_follow(uname)
+                        verified = bool(vr.get("followed"))
+                        vdetail = str(vr.get("detail") or "")
+                        with states_lock:
+                            st.result = "ĐÃ FL" if verified else "CHƯA FL"
+                            st.msg = vdetail[:28]
+                    elif job_key == "tim":
+                        vr = actor.verify_like(str(t.get("idpost") or ""))
+                        verified = bool(vr.get("liked"))
+                        vdetail = str(vr.get("detail") or "")
+                        with states_lock:
+                            st.result = "ĐÃ TIM" if verified else "CHƯA TIM"
+                            st.msg = vdetail[:28]
+                    elif job_key == "cmt":
+                        with states_lock:
+                            st.result = "ĐÃ CMT"
+                            st.msg = "posted"
+                        verified = True
+                except Exception as ve:
+                    with states_lock:
+                        st.result = "check lỗi"
+                        st.msg = str(ve)[:28]
+                    verified = False
+
+            if verified:
                 ok_ids.append(idp)
+                done_tt += 1
+            else:
+                with states_lock:
+                    if st.result in ("đang TT", "TT retry"):
+                        st.result = "CHƯA FL" if job_key in ("sub","vip") else "fail"
+                    st.miss += 0  # không miss oan từng cái — đếm batch sau
             # nghỉ 5–10s mỗi nhiệm vụ
             time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
+
+        # xong FULL batch mới đóng actor + claim + getpost vòng sau
+        with states_lock:
+            st.msg = "xong batch %d/%d" % (len(ok_ids), len(batch))
+            st.result = "batch xong"
 
         if actor:
             try:
