@@ -238,7 +238,7 @@ class TikTokActor:
                 return {"followed": True, "detail": "message_btn"}
             # 3) không còn Follow + có following trong DOM
             html = (self.driver.page_source or "").lower()
-            if "data-e2e="follow-button"" not in html:
+            if "follow-button" not in html:
                 if "following" in html or "đang follow" in html:
                     return {"followed": True, "detail": "no_follow_btn"}
             if btns:
