@@ -246,8 +246,58 @@ def filter_alive_accounts(accounts):
     return alive
 
 
-def set_active_nick(sid, nick_id):
-    return api_post(sid, "/cauhinh/datnick.php", {"iddat": nick_id, "loai": "tt"})
+def set_active_nick(sid, nick_id, retries=5):
+    """Cấu hình nick trên panel trước khi cày. Retry khi rate-limit."""
+    last = None
+    for attempt in range(retries):
+        last = api_post(sid, "/cauhinh/datnick.php", {"iddat": nick_id, "loai": "tt"})
+        text = ""
+        if isinstance(last, dict):
+            text = str(
+                last.get("_code")
+                or last.get("_raw")
+                or last.get("error")
+                or last.get("mess")
+                or last.get("_error")
+                or ""
+            ).strip()
+        else:
+            text = str(last or "").strip()
+
+        low = text.lower()
+        # rate-limit → chờ rồi thử lại
+        if any(k in low for k in ("chậm", "spam", "giây", "đợi", "nhanh")):
+            time.sleep(3 + attempt * 2)
+            continue
+        # success
+        if text in ("0", "1", "2", "ok", "success", ""):
+            return True, (text or "ok"), last
+        if "thành công" in low or "success" in low:
+            return True, text[:40], last
+        # mã số thuần
+        if text.isdigit() and int(text) <= 5:
+            return True, text, last
+        time.sleep(2 + attempt)
+    return False, str(last)[:80] if last is not None else "fail", last
+
+
+def configure_account(sid, st: "AccState"):
+    """Gọi trước khi farm_one cày — cập nhật dashboard."""
+    with states_lock:
+        st.status = "config"
+        st.result = "đang cấu hình"
+        st.msg = "datnick..."
+    ok, detail, raw = set_active_nick(sid, st.id)
+    with states_lock:
+        if ok:
+            st.result = "config OK"
+            st.msg = f"datnick={detail}"
+            st.status = "running"
+        else:
+            st.result = "config FAIL"
+            st.msg = str(detail)[:36]
+            st.status = "error"
+    return ok
 
 # ═══════════════════════ JOBS ═══════════════════════
 def get_tasks(sid, job_key, nick_id):
@@ -339,6 +389,7 @@ def print_dashboard():
         "wait": (C.Y, "CHỜ JOB"),
         "claim": (C.M, "NHẬN XU"),
         "error": (C.E, "LỖI"),
+        "config": (C.M, "CẤU HÌNH"),
     }
     for s in rows:
         stc, stlabel = status_map.get(s.status, (C.W, s.status[:8]))
@@ -358,15 +409,24 @@ def print_dashboard():
     print(f"  {C.K}Delay/job {DELAY_MIN}-{DELAY_MAX}s  •  Workers đa luồng (sub/tim/cmt/vip){C.R}\n")
 
 # ═══════════════════════ WORKER ═══════════════════════
-def farm_one(sid, st: AccState, mode: str):
+def farm_one(sid, st: AccState, mode: str, worker_index: int = 0):
     global global_done, stop_all
     nick_id = st.id
     cycle = ["sub", "tim", "cmt", "vip"] if mode == "tonghop" else [mode]
     idx = 0
-    set_active_nick(sid, nick_id)
 
-    with states_lock:
-        st.status = "running"
+    # Stagger đa luồng — tránh rate-limit datnick
+    if worker_index > 0:
+        time.sleep(worker_index * 2.5)
+
+    if not configure_account(sid, st):
+        # thử lại 1 lần sau nghỉ
+        time.sleep(5)
+        if not configure_account(sid, st):
+            with states_lock:
+                st.status = "stopped"
+                st.msg = "không cấu hình được nick"
+            return
 
     while not stop_all and st.miss < MAX_MISS and global_done < global_target:
         job_key = cycle[idx % len(cycle)]
@@ -708,7 +768,9 @@ def main():
 
     try:
         with ThreadPoolExecutor(max_workers=workers) as ex:
-            futs = [ex.submit(farm_one, sid, states[a["id"]], mode) for a in accounts]
+            futs = []
+            for i, a in enumerate(accounts):
+                futs.append(ex.submit(farm_one, sid, states[a["id"]], mode, i))
             for f in as_completed(futs):
                 try:
                     f.result()
