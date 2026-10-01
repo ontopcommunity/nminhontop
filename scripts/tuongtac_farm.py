@@ -28,8 +28,8 @@ SESSIONS_FILE = SCRIPT_DIR / "tiktok_sessions.txt"
 
 MAX_MISS      = 10
 DEFAULT_TARGET = 10000
-DELAY_MIN, DELAY_MAX = 3, 8
-WORKERS       = 3  # mỗi acc 1 browser Playwright
+DELAY_MIN, DELAY_MAX = 5, 10  # mỗi nhiệm vụ 5–10 giây
+WORKERS       = 5  # đa luồng đa acc (gồm VIP)
 
 JOBS = {
     "sub": {"name": "Sub",    "path": "subcheo"},
@@ -327,19 +327,35 @@ def print_dashboard():
 
     # table header
     print()
-    hdr = f"  {'USER':<16} {'ID':<16} {'STT':<9} {'JOB':<7} {'TARGET':<22} {'KQ':<10} {'DONE':>5} {'MISS':>4} {'XU':>5}"
+    hdr = f"  {'USER':<12} {'XU':<8} {'TRẠNG THÁI':<9} {'JOB':<7} {'TARGET':<18} {'KẾT QUẢ':<12} {'DONE':>4} {'MISS':>3}  GHI CHÚ"
     print(f"{C.B}{hdr}{C.R}")
     print(f"  {C.K}{'─' * 100}{C.R}")
 
+    status_map = {
+        "running": (C.G, "ĐANG LÀM"),
+        "stopped": (C.E, "DỪNG"),
+        "done": (C.C, "XONG"),
+        "idle": (C.K, "CHỜ"),
+        "wait": (C.Y, "CHỜ JOB"),
+        "claim": (C.M, "NHẬN XU"),
+        "error": (C.E, "LỖI"),
+    }
     for s in rows:
-        stc = {"running": C.G, "stopped": C.E, "done": C.C, "idle": C.K}.get(s.status, C.W)
-        uid_short = s.id[:14] + "…" if len(s.id) > 14 else s.id
-        tgt = str(s.target)[:20]
+        stc, stlabel = status_map.get(s.status, (C.W, s.status[:8]))
+        # USER + xu ngay sau tên:  @user (+123 xu)
+        xu_tag = f"{C.Y}+{s.xu}xu{C.R}" if s.xu else f"{C.K}+0xu{C.R}"
+        user_col = f"{s.username[:12]}"
+        uid_short = (s.id[:12] + "…") if len(s.id) > 12 else s.id
+        tgt = str(s.target)[:18]
+        kq = str(s.result)[:12]
+        msg = str(s.msg)[:18] if s.msg else ""
         print(
-            f"  {s.username:<16} {uid_short:<16} {stc}{s.status:<9}{C.R} "
-            f"{s.job:<7} {tgt:<22} {s.result:<10} {s.done:>5} {s.miss:>4} {s.xu:>5}"
+            f"  {C.B}{user_col:<12}{C.R} {xu_tag:<14} "
+            f"{stc}{stlabel:<9}{C.R} {s.job:<7} {tgt:<18} "
+            f"{kq:<12} {s.done:>4} {s.miss:>3}  {msg}"
         )
-    print(f"  {C.K}{'─' * 100}{C.R}\n")
+    print(f"  {C.K}{'─' * 100}{C.R}")
+    print(f"  {C.K}Delay/job {DELAY_MIN}-{DELAY_MAX}s  •  Workers đa luồng (sub/tim/cmt/vip){C.R}\n")
 
 # ═══════════════════════ WORKER ═══════════════════════
 def farm_one(sid, st: AccState, mode: str):
@@ -359,7 +375,7 @@ def farm_one(sid, st: AccState, mode: str):
 
         with states_lock:
             st.job = job["name"]
-            st.result = "đang lấy"
+            st.result = "lấy job"
             st.target = "-"
             st.msg = ""
 
@@ -380,10 +396,13 @@ def farm_one(sid, st: AccState, mode: str):
                 time.sleep(4)
                 continue
             if cd > 0:
-                # rate-limit / hết job tạm — KHÔNG tính miss oan
                 with states_lock:
-                    st.result = "cho %ds" % min(cd, 60)
+                    st.status = "wait"
+                    st.result = "chờ %ds" % min(cd, 60)
+                    st.msg = "rate-limit panel"
                 time.sleep(min(cd, 25) if mode == "tonghop" else min(cd, 45))
+                with states_lock:
+                    st.status = "running"
                 continue
             # lỗi khác không phải countdown
             time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
@@ -391,7 +410,7 @@ def farm_one(sid, st: AccState, mode: str):
 
         if not tasks:
             with states_lock:
-                st.result = "het job"
+                st.result = "hết job"
                 # không +miss — chỉ chuyển loại job / chờ
             time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
             continue
@@ -420,7 +439,7 @@ def farm_one(sid, st: AccState, mode: str):
                 continue
             with states_lock:
                 st.target = str(t.get("link") or t.get("uid") or idp)[:22]
-                st.result = "dang TT"
+                st.result = "đang TT"
 
             success = False
             # Nhận job rồi: thử tới 6 lần trước khi bỏ
@@ -471,7 +490,8 @@ def farm_one(sid, st: AccState, mode: str):
 
             if success:
                 ok_ids.append(idp)
-            time.sleep(random.uniform(1.0, 2.0))
+            # nghỉ 5–10s mỗi nhiệm vụ
+            time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
 
         if actor:
             try:
@@ -505,10 +525,31 @@ def farm_one(sid, st: AccState, mode: str):
             claim_ok = True
             break
 
+        # Ước lượng / parse xu từ claim response
+        gained = 0
+        try:
+            claim_data = claim if isinstance(claim, dict) else {}
+            for k in ("xu", "sodu", "coin", "money", "gold"):
+                if k in claim_data and str(claim_data[k]).replace(".","").isdigit():
+                    # sodu là số dư — chỉ cộng xu nếu field xu
+                    if k == "xu":
+                        gained = int(float(claim_data[k]))
+            raw = str(claim_data.get("_raw") or claim_data.get("mess") or claim_data.get("error") or "")
+            m_xu = re.search(r"(\+|\b)(\d+)\s*xu", raw, re.I)
+            if m_xu and not gained:
+                gained = int(m_xu.group(2))
+            if not gained and ok_ids:
+                gained = len(ok_ids)  # fallback: +1 xu / job nếu panel không trả
+        except Exception:
+            gained = len(ok_ids)
+
         with states_lock:
             st.done += len(ok_ids)
-            st.result = "OK %d/%d" % (done_tt, len(batch))
-            st.miss = 0  # có hoàn thành → reset miss
+            st.xu += gained
+            st.status = "running"
+            st.result = "OK %d job" % len(ok_ids)
+            st.msg = "+%dxu (tổng %d)" % (gained, st.xu)
+            st.miss = 0
             global_done += len(ok_ids)
 
         time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
@@ -537,7 +578,9 @@ def main():
         return
     log_ok(f"Session OK  {sid[:22]}...")
     if HAS_TT:
-        log_info(f"Proxy TT: {TT_PROXY or "(direct)"}")
+        log_info("TikTok engine: UC/SeleniumBase UI (delay %d–%ds/job)" % (DELAY_MIN, DELAY_MAX))
+    else:
+        log_warn("tiktok_actions không load — chỉ nhận job/claim panel")
 
     accounts = load_accounts()
     if not accounts:
@@ -564,15 +607,30 @@ def main():
         f"  {C.C}5{C.R}. {C.B}Tổng hợp{C.R} (sub → tim → cmt → vip)",
     ], width=60, color=C.M)
 
-    choice = input(f"\n  {C.Y}› Chế độ [5] {C.R}").strip() or "5"
-    mode_map = {"1": "sub", "2": "tim", "3": "cmt", "4": "vip", "5": "tonghop"}
-    mode = mode_map.get(choice, "tonghop")
+    # AUTO_* env để test không cần nhập
+    auto_mode = os.getenv("AUTO_MODE", "").strip()
+    auto_target = os.getenv("AUTO_TARGET", "").strip()
+    auto_workers = os.getenv("AUTO_WORKERS", "").strip()
 
-    t = input(f"  {C.Y}› Mục tiêu nhiệm vụ [{DEFAULT_TARGET}] {C.R}").strip()
-    global_target = int(t) if t.isdigit() else DEFAULT_TARGET
+    if auto_mode:
+        mode = auto_mode if auto_mode in ("sub", "tim", "cmt", "vip", "tonghop") else "sub"
+        log_info(f"AUTO_MODE={mode}")
+    else:
+        choice = input(f"\n  {C.Y}› Chế độ [5] {C.R}").strip() or "5"
+        mode_map = {"1": "sub", "2": "tim", "3": "cmt", "4": "vip", "5": "tonghop"}
+        mode = mode_map.get(choice, "tonghop")
 
-    w = input(f"  {C.Y}› Số acc song song [3] {C.R}").strip()
-    workers = int(w) if w.isdigit() else min(3, len(accounts))
+    if auto_target.isdigit():
+        global_target = int(auto_target)
+    else:
+        t = input(f"  {C.Y}› Mục tiêu nhiệm vụ [{DEFAULT_TARGET}] {C.R}").strip()
+        global_target = int(t) if t.isdigit() else DEFAULT_TARGET
+
+    if auto_workers.isdigit():
+        workers = int(auto_workers)
+    else:
+        w = input(f"  {C.Y}› Số acc song song [{min(WORKERS, len(accounts))}] {C.R}").strip()
+        workers = int(w) if w.isdigit() else min(WORKERS, len(accounts))
     workers = max(1, min(workers, len(accounts)))
 
     states = {a["id"]: AccState(a) for a in accounts}
