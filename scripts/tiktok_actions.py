@@ -103,15 +103,54 @@ class TikTokActor:
         d = self.driver
         d.get("https://www.tiktok.com/")
         time.sleep(2 + random.random())
+        n_ck = 0
         for c in _cookie_dicts(self.cookies_str):
             try:
                 d.add_cookie(c)
+                n_ck += 1
             except Exception:
                 pass
         d.get("https://www.tiktok.com/foryou")
-        time.sleep(2 + random.random())
-        print("  [tt] engine=%s cookies=%d" % (self.engine, len(_cookie_dicts(self.cookies_str))))
+        time.sleep(2.5 + random.random())
+        # Xác nhận đã login — bắt buộc
+        self.logged_in, self.login_detail = self._check_logged_in()
+        print("  [tt] engine=%s cookies=%d login=%s (%s)" % (
+            self.engine, n_ck, self.logged_in, self.login_detail))
+        if not self.logged_in:
+            print("  [tt] CẢNH BÁO: session cookie KHÔNG login được trên browser")
         return self
+
+    def _check_logged_in(self):
+        """True chỉ khi thấy avatar / profile menu, không còn nút Log in."""
+        try:
+            from selenium.webdriver.common.by import By
+            d = self.driver
+            # nút Log in còn hiện → chưa login
+            login_btns = d.find_elements(By.XPATH,
+                '//*[contains(text(),"Log in") or contains(text(),"Đăng nhập")]')
+            visible_login = False
+            for b in login_btns[:5]:
+                try:
+                    if b.is_displayed():
+                        visible_login = True
+                        break
+                except Exception:
+                    pass
+            # avatar / profile icon
+            av = d.find_elements(By.XPATH,
+                '//*[@data-e2e="profile-icon"]|//*[@data-e2e="nav-profile"]|//a[contains(@href,"/profile")]')
+            if av and not visible_login:
+                return True, "profile_icon"
+            # cookie sessionid còn trong browser
+            ck = {c["name"]: c["value"] for c in d.get_cookies()}
+            if ck.get("sessionid") and not visible_login:
+                # thử mở setting nhẹ
+                return True, "sessionid_cookie"
+            if visible_login:
+                return False, "login_button_visible"
+            return False, "no_profile"
+        except Exception as e:
+            return False, str(e)[:40]
 
     def close(self):
         try:
@@ -198,53 +237,49 @@ class TikTokActor:
         if not clicked:
             return {"ok": False, "action": "follow", "reason": "no_follow_btn", "ui": False, "engine": self.engine}
 
-        # Verify text sau click
-        try:
-            from selenium.webdriver.common.by import By
-            btns = self.driver.find_elements(By.XPATH, '//button[@data-e2e="follow-button"]')
-            for b in btns[:3]:
-                txt = (b.text or "").strip().lower()
-                if any(x in txt for x in ("following", "requested", "đang follow", "đã follow", "friends")):
-                    return {"ok": True, "action": "follow", "reason": "ui_following", "ui": True, "engine": self.engine}
-        except Exception:
-            pass
-
-        return {"ok": True, "action": "follow", "reason": "ui_clicked", "ui": True, "engine": self.engine}
+        time.sleep(1.5 + random.random())
+        # CHỈ ok khi verify_follow thấy Following rõ ràng
+        vr = self.verify_follow("")  # đã ở đúng trang profile
+        if vr.get("followed"):
+            return {"ok": True, "action": "follow", "reason": "ui_following", "ui": True,
+                    "engine": self.engine, "detail": vr.get("detail")}
+        return {"ok": False, "action": "follow", "reason": "click_but_not_following",
+                "ui": True, "engine": self.engine, "detail": vr.get("detail")}
 
 
     def verify_follow(self, username: str = "") -> dict:
-        """Check đã follow chưa: Following / Message / hết nút Follow."""
+        """CHỈ followed=True khi nút follow-button hiện Following / Đang follow / Requested."""
         username = (username or "").strip().lstrip("@")
         if username:
             try:
                 self.driver.get("https://www.tiktok.com/@%s" % username)
-                time.sleep(2.2 + random.random())
+                time.sleep(2.5 + random.random())
             except Exception as e:
                 return {"followed": False, "detail": "nav:" + str(e)[:40]}
         try:
             from selenium.webdriver.common.by import By
-            # 1) follow-button text
             btns = self.driver.find_elements(By.XPATH, '//button[@data-e2e="follow-button"]')
-            for b in btns[:5]:
-                txt = (b.text or "").strip().lower()
-                if any(x in txt for x in ("following", "requested", "đang follow", "đã follow", "friends", "bạn bè")):
-                    return {"followed": True, "detail": txt or "following"}
-                if txt in ("follow", "theo dõi") or txt.startswith("follow"):
-                    return {"followed": False, "detail": txt or "follow"}
-            # 2) nút Message thường chỉ hiện khi đã follow / bạn
-            msg = self.driver.find_elements(By.XPATH,
-                '//button[@data-e2e="message-button"]|//button[contains(.,"Message")]|//button[contains(.,"Nhắn tin")]')
-            if msg and not btns:
-                return {"followed": True, "detail": "message_btn"}
-            # 3) không còn Follow + có following trong DOM
-            html = (self.driver.page_source or "").lower()
-            if "follow-button" not in html:
-                if "following" in html or "đang follow" in html:
-                    return {"followed": True, "detail": "no_follow_btn"}
-            if btns:
-                t0 = (btns[0].text or "").strip().lower()
-                return {"followed": False, "detail": t0 or "btn_unknown"}
-            return {"followed": False, "detail": "unknown"}
+            texts = []
+            for b in btns[:6]:
+                try:
+                    txt = (b.text or "").strip().lower()
+                except Exception:
+                    continue
+                if not txt:
+                    continue
+                texts.append(txt)
+                # ĐÃ follow — text rõ ràng
+                if any(x in txt for x in (
+                    "following", "requested", "đang follow", "đã follow",
+                    "friends", "bạn bè", "unfollow", "bỏ theo dõi",
+                )):
+                    return {"followed": True, "detail": txt}
+                # CHƯA follow
+                if txt in ("follow", "theo dõi") or txt.startswith("follow") or "theo dõi" in txt:
+                    return {"followed": False, "detail": txt}
+            if not btns:
+                return {"followed": False, "detail": "no_follow_btn"}
+            return {"followed": False, "detail": texts[0] if texts else "empty_btn"}
         except Exception as e:
             return {"followed": False, "detail": str(e)[:40]}
 

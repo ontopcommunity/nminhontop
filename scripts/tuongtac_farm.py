@@ -559,9 +559,13 @@ def farm_one(sid, st: AccState, mode: str, worker_index: int = 0):
                             import re as _re
                             mm = _re.search(r"@([\w._]+)", uname)
                             uname = mm.group(1) if mm else uname
+                        # success từ do_task đã gọi verify nghiêm; check lại
                         vr = actor.verify_follow(uname)
                         verified = bool(vr.get("followed"))
                         vdetail = str(vr.get("detail") or "")
+                        # không tin no_follow_btn / ui_clicked
+                        if not verified:
+                            verified = False
                         with states_lock:
                             st.result = "ĐÃ FL" if verified else "CHƯA FL"
                             st.msg = vdetail[:28]
