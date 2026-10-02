@@ -33,20 +33,19 @@ CHANGE_ACC_AFTER = 8            # đổi acc sau N job thành công
 
 # Nhiệm vụ Facebook trên TTC
 JOBS = {
-    "like":      {"name": "Like",      "path": "likepostvipcheo",  "group": "REACT"},
-    "like2":     {"name": "Like2",     "path": "likepostvipre",    "group": "REACT"},
-    "camxuc":    {"name": "CamXuc",    "path": "camxucvipcheo",    "group": "REACT"},
-    "camxuc2":   {"name": "CamXuc2",   "path": "camxucvipre",      "group": "REACT"},
-    "react_cmt": {"name": "ReactCMT",  "path": "camxuccheobinhluan","group": "REACT_CMT"},
-    "cmt":       {"name": "Comment",   "path": "cmtcheo",          "group": "COMMENT"},
-    "sub":       {"name": "Follow",    "path": "subcheo",          "group": "FOLLOW"},
-    "subvip":    {"name": "FollowVIP", "path": "subcheofbvip",     "group": "FOLLOW"},
-    "share":     {"name": "Share",     "path": "sharecheo",        "group": "SHARE"},
-    "sharemsg":  {"name": "ShareMsg",  "path": "sharecheokemnoidung","group": "SHARE"},
-    "likepage":  {"name": "LikePage",  "path": "likepagecheo",     "group": "LIKE_PAGE"},
-    "join":      {"name": "JoinPage",  "path": "thamgianhomcheo",  "group": "JOIN_PAGE"},
-    "rate":      {"name": "RatePage",  "path": "danhgiapage",      "group": "RATE_PAGE"},
+    # Đúng path user cung cấp (kiemtien/...)
+    "like":      {"name": "Like",      "path": "likepostvipre",       "group": "REACT"},
+    "camxuc":    {"name": "CamXuc",    "path": "camxucvipre",         "group": "REACT"},
+    "cmt":       {"name": "Comment",   "path": "cmtcheo",             "group": "COMMENT"},
+    "sub":       {"name": "Follow",    "path": "subcheo",             "group": "FOLLOW"},
+    "share":     {"name": "Share",     "path": "sharecheo",           "group": "SHARE"},
+    "sharemsg":  {"name": "ShareMsg",  "path": "sharecheokemnoidung", "group": "SHARE"},
+    "likepage":  {"name": "LikePage",  "path": "likepagecheo",        "group": "LIKE_PAGE"},
+    "join":      {"name": "JoinGroup", "path": "thamgianhomcheo",     "group": "JOIN_PAGE"},
+    "rate":      {"name": "RatePage",  "path": "danhgiapage",         "group": "RATE_PAGE"},
 }
+# Thứ tự cày ALL: xong hết loại này mới sang loại khác
+ALL_CYCLE = ["sub", "like", "camxuc", "cmt", "share", "sharemsg", "likepage", "join", "rate"]
 
 # ═══════════════════════ COLORS ═══════════════════════
 class C:
@@ -303,10 +302,11 @@ def farm_one(sid: str, st: AccState, modes: List[str], worker_index: int = 0):
         st.msg = f"datnick={detail}"
     log_ok(f"datnick {st.uid} OK ({detail})")
 
+    # Sticky mode: cày hết job_key hiện tại mới chuyển loại tiếp
     mode_idx = 0
+    empty_streak = 0
     while not stop_all and st.miss < MAX_MISS and global_done < global_target:
         job_key = modes[mode_idx % len(modes)]
-        mode_idx += 1
         with states_lock:
             st.job = JOBS[job_key]["name"]
             st.result = "lấy job"
@@ -322,20 +322,38 @@ def farm_one(sid: str, st: AccState, modes: List[str], worker_index: int = 0):
                 st.msg = err[:36]
             if cd > 0:
                 time.sleep(min(cd, 40))
-            else:
-                time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
+                with states_lock:
+                    st.status = "running"
+                continue
+            # hết job / cần thêm nick → chuyển loại nhiệm vụ
+            empty_streak += 1
+            mode_idx += 1
             with states_lock:
                 st.status = "running"
+                st.result = f"→ {JOBS[modes[mode_idx % len(modes)]]['name']}"
+            if empty_streak >= len(modes):
+                time.sleep(random.uniform(8, 15))
+                empty_streak = 0
+            else:
+                time.sleep(2)
             continue
 
         jobs = parse_jobs(data)
         if not jobs:
+            # Hết nhiệm vụ loại này → qua loại khác
+            empty_streak += 1
+            mode_idx += 1
             with states_lock:
-                st.result = "hết job"
-            time.sleep(random.uniform(5, 12))
+                st.result = f"hết → {JOBS[modes[mode_idx % len(modes)]]['name']}"
+            if empty_streak >= len(modes):
+                time.sleep(random.uniform(8, 15))
+                empty_streak = 0
+            else:
+                time.sleep(2)
             continue
 
-        # Full batch từ 1 lần getpost
+        empty_streak = 0
+        # Full batch từ 1 lần getpost — xong hết mới get lại cùng loại
         for item in jobs:
             if stop_all or global_done >= global_target or st.miss >= MAX_MISS:
                 break
@@ -437,7 +455,7 @@ def main():
 
     if auto_mode:
         if auto_mode == "tonghop":
-            modes = ["like", "sub", "cmt"]
+            modes = list(ALL_CYCLE)
         elif auto_mode in JOBS:
             modes = [auto_mode]
         else:
@@ -446,7 +464,7 @@ def main():
     else:
         choice = input(f"\n  {C.Y}› Chọn [0] {C.R}").strip() or "0"
         if choice == "0":
-            modes = ["like", "sub", "cmt"]
+            modes = list(ALL_CYCLE)
         else:
             idxs = [int(x) - 1 for x in choice.split() if x.isdigit()]
             modes = [keys[i] for i in idxs if 0 <= i < len(keys)] or ["like"]
