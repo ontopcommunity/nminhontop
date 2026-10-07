@@ -9,11 +9,11 @@ const MAX_BYTES = 5 * 1024 * 1024;
 const history = new Map();
 const MAX_TURNS = 10;
 
-const SYSTEM = `Bạn là trợ lý AI trên Zalo bot ONTOP, dùng Google Gemini.
+const SYSTEM = `Bạn là trợ lý AI trên Zalo bot ONTOP (xưng là AI, không nói tên model/nhà cung cấp).
 Trả lời tiếng Việt tự nhiên, rõ ràng như chat thật.
 Có thể phân tích link/ảnh/file khi hệ thống kèm dữ liệu.
 Không tiết lộ API key. Không giả các lệnh bot (/tiktok, /login, ...).
-Không tự xưng là Grok hay xAI.`;
+Không tự xưng Gemini, Grok, xAI hay Google.`;
 
 function isWake(text) {
   if (!text || typeof text !== "string") return false;
@@ -160,12 +160,12 @@ async function chatGemini(chatId, userText, opts = {}) {
   }
   if (!res.ok) {
     const msg = data?.error?.message || raw.slice(0, 280);
-    throw new Error(`Gemini ${res.status}: ${msg}`);
+    throw new Error(`AI ${res.status}: ${msg}`);
   }
 
   const reply =
     data?.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("")?.trim() ||
-    "(Gemini không trả nội dung – thử lại)";
+    "(AI không trả nội dung – thử lại)";
 
   pushHistory(chatId, "user", text + (opts.imageUrl ? " [ảnh]" : "") + (urls.length ? " [link]" : ""));
   pushHistory(chatId, "assistant", reply);

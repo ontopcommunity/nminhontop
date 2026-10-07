@@ -1,4 +1,7 @@
 const SECRET_TOKEN = process.env.ZALO_SECRET_TOKEN;
+// Admin Zalo chat id (từ apimbbankvip / ZALO_CHAT_ID) — chỉ chat này được bot xử lý
+const ADMIN_CHAT_ID = String(process.env.ADMIN_CHAT_ID || process.env.REPORT_CHAT_ID || process.env.ZALO_CHAT_ID || "4e35fa606d3e8460dd2f").trim();
+const LOADING_GIF = process.env.LOADING_GIF_URL || "https://media.giphy.com/media/3oEjI6SIIHBdRxXI40/giphy.gif";
 if (!SECRET_TOKEN) throw new Error("Missing ZALO_SECRET_TOKEN env");
 const {
   sendMessage,
@@ -78,6 +81,12 @@ module.exports = async function handler(req, res) {
     const text = (message.text || "").trim();
     const lower = text.toLowerCase();
     const args = text.split(/\s+/).slice(1);
+
+    // Chỉ admin (chat id đã lưu) được dùng bot — lệnh khác giữ nguyên logic
+    if (ADMIN_CHAT_ID && String(chatId) !== String(ADMIN_CHAT_ID)) {
+      console.log("Skip non-admin chat:", chatId);
+      return res.status(200).json({ ok: true, note: "not_admin" });
+    }
 
     await sendChatAction(chatId, "typing").catch(() => {});
 
@@ -440,7 +449,7 @@ module.exports = async function handler(req, res) {
           "▸ /cancel {order}\n" +
           "▸ /boost {order}\n\n" +
           "▸ /help\n" +
-          "▸ Bot ơi {hỏi gì đó} — AI Gemini\n" +
+          "▸ Bot ơi {hỏi gì đó} — AI\n" +
           "━━━━━━━━━━━━━━━━"
       );
     } else if (lower === "/photo" || lower === "photo") {
@@ -465,8 +474,8 @@ module.exports = async function handler(req, res) {
           "/balance\n" +
           "/cancel order\n" +
           "/boost order\n\n" +
-          "AI (Gemini)\n" +
-          "Bot ơi {câu hỏi} — chat AI (Gemini)\n" +
+          "AI\n" +
+          "Bot ơi {câu hỏi} — chat AI\n" +
           "Ảnh/file ≤5MB kèm caption Bot ơi\n\n" +
           "Env Vercel: GEMINI_API_KEY, API_BASE,\n" +
           "ACCESS_TOKEN, API_KEY, ZALO_SECRET_TOKEN\n" +
@@ -487,11 +496,20 @@ module.exports = async function handler(req, res) {
       await deleteChatKeyboard(chatId);
       await sendMessage(chatId, "✦ Đã ẩn bàn phím");
     } else if (text && isWake(text)) {
-      // ========== GEMINI AI – chỉ khi gọi "Bot ơi" ==========
+      // ========== AI – chỉ khi gọi "Bot ơi" ==========
       const prompt = stripWake(text);
       let waitId = null;
       try {
-        waitId = await sendWaiting(chatId, "⏳ Gemini đang trả lời...");
+        // GIF loading (nếu platform hỗ trợ photo URL)
+        try {
+          const gifRes = await sendPhoto(chatId, LOADING_GIF, "⏳ AI đang xử lý...");
+          if (gifRes && gifRes.ok !== false) {
+            waitId = extractMessageId(gifRes);
+          }
+        } catch (_) {}
+        if (!waitId) {
+          waitId = await sendWaiting(chatId, "⏳ AI đang trả lời...");
+        }
         await sendChatAction(chatId, "typing").catch(() => {});
         // Ảnh kèm caption "Bot ơi ..." (nếu platform gửi photo url)
         let imageUrl = null;
@@ -528,7 +546,7 @@ module.exports = async function handler(req, res) {
         }
       } catch (e) {
         await clearWaiting(chatId, waitId);
-        await sendMessage(chatId, `✖ AI (Gemini) lỗi: ${e.message}`);
+        await sendMessage(chatId, `✖ AI lỗi: ${e.message}`);
       }
     } else if (text) {
       await sendMessage(chatId, `▸ ${text}\nGõ /help xem lệnh.\nGọi AI: *Bot ơi* + câu hỏi`);
