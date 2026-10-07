@@ -30,7 +30,7 @@ const {
   doBoost,
   loginSession,
 } = require("./smm");
-const { isWake, stripWake, chatGrok } = require("./grok");
+const { chatGrok } = require("./grok");
 
 const DEMO_PHOTO = "https://placehold.co/600x400/png?text=Zalo+Bot+Ontop";
 
@@ -449,7 +449,8 @@ module.exports = async function handler(req, res) {
           "▸ /cancel {order}\n" +
           "▸ /boost {order}\n\n" +
           "▸ /help\n" +
-          "▸ Bot ơi {hỏi gì đó} — AI\n" +
+          "▸ Nhắn thường — AI trả lời\n" +
+          "▸ /{lệnh} — lệnh bot (không qua AI)\n" +
           "━━━━━━━━━━━━━━━━"
       );
     } else if (lower === "/photo" || lower === "photo") {
@@ -475,8 +476,9 @@ module.exports = async function handler(req, res) {
           "/cancel order\n" +
           "/boost order\n\n" +
           "AI\n" +
-          "Bot ơi {câu hỏi} — chat AI\n" +
-          "Ảnh/file ≤5MB kèm caption Bot ơi\n\n" +
+          "Nhắn thường (không bắt đầu bằng /) — AI\n" +
+          "Ảnh/file ≤5MB gửi kèm tin thường\n" +
+          "/{lệnh} — chỉ lệnh, không gọi AI\n\n" +
           "Env Vercel: GEMINI_API_KEY, API_BASE,\n" +
           "ACCESS_TOKEN, API_KEY, ZALO_SECRET_TOKEN\n" +
           "━━━━━━━━━━━━━━━━"
@@ -495,12 +497,14 @@ module.exports = async function handler(req, res) {
     } else if (lower === "/hidekb" || lower === "ẩn bàn phím" || lower === "ẩn") {
       await deleteChatKeyboard(chatId);
       await sendMessage(chatId, "✦ Đã ẩn bàn phím");
-    } else if (text && isWake(text)) {
-      // ========== AI – chỉ khi gọi "Bot ơi" ==========
-      const prompt = stripWake(text);
+    } else if (text && text.trim().startsWith("/")) {
+      // Lệnh / không khớp — không gọi AI
+      await sendMessage(chatId, `▸ Không rõ lệnh: ${text.split(/\s+/)[0]}\nGõ /help xem danh sách lệnh.`);
+    } else if (text || message.photo || message.document) {
+      // ========== AI – tin nhắn thường (không bắt đầu bằng /) ==========
+      const prompt = (text || "").trim() || "Hãy mô tả nội dung đính kèm.";
       let waitId = null;
       try {
-        // GIF loading (nếu platform hỗ trợ photo URL)
         try {
           const gifRes = await sendPhoto(chatId, LOADING_GIF, "⏳ AI đang xử lý...");
           if (gifRes && gifRes.ok !== false) {
@@ -511,7 +515,6 @@ module.exports = async function handler(req, res) {
           waitId = await sendWaiting(chatId, "⏳ AI đang trả lời...");
         }
         await sendChatAction(chatId, "typing").catch(() => {});
-        // Ảnh kèm caption "Bot ơi ..." (nếu platform gửi photo url)
         let imageUrl = null;
         let fileUrl = null;
         let fileName = null;
@@ -531,9 +534,8 @@ module.exports = async function handler(req, res) {
           const mt = (message.document.mime_type || "").toLowerCase();
           if (!imageUrl && mt.startsWith("image/")) imageUrl = fileUrl;
         }
-        const reply = await chatGrok(chatId, prompt || "Chào bạn", { imageUrl, fileUrl, fileName });
+        const reply = await chatGrok(chatId, prompt, { imageUrl, fileUrl, fileName });
         await clearWaiting(chatId, waitId);
-        // Cắt tin dài thành nhiều đoạn nếu cần
         const chunks = [];
         let s = reply;
         while (s.length > 3500) {
@@ -548,10 +550,6 @@ module.exports = async function handler(req, res) {
         await clearWaiting(chatId, waitId);
         await sendMessage(chatId, `✖ AI lỗi: ${e.message}`);
       }
-    } else if (text) {
-      await sendMessage(chatId, `▸ ${text}\nGõ /help xem lệnh.\nGọi AI: *Bot ơi* + câu hỏi`);
-    } else {
-      await sendMessage(chatId, "✦ Đã nhận tin nhắn.\nGọi AI: Bot ơi ...");
     }
 
     return res.status(200).json({ ok: true });
