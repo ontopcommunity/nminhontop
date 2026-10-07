@@ -347,6 +347,38 @@ module.exports = async function handler(req, res) {
     }
 
     // ========== MENU / HELP ==========
+    // ========== /id — thông tin người nhắn ==========
+    if (lower === "/id" || lower === "id" || lower.startsWith("/id ")) {
+      const chat = message.chat || {};
+      const from = message.from || message.sender || {};
+      const lines = [
+        "🪪 Thông tin người nhắn",
+        "",
+        `Chat ID: ${chatId}`,
+        from.id ? `User ID: ${from.id}` : null,
+        from.account_name || from.username
+          ? `Account: ${from.account_name || from.username}`
+          : null,
+        from.display_name || from.name || chat.display_name || chat.name
+          ? `Tên: ${from.display_name || from.name || chat.display_name || chat.name}`
+          : null,
+        chat.type ? `Loại chat: ${chat.type}` : null,
+        message.message_id ? `Message ID: ${message.message_id}` : null,
+        message.date ? `Time: ${message.date}` : null,
+      ].filter(Boolean);
+      // full raw nhỏ gọn để debug
+      try {
+        const raw = JSON.stringify(
+          { chat: message.chat, from: message.from || message.sender },
+          null,
+          2
+        );
+        lines.push("", "Raw:", raw.length > 1200 ? raw.slice(0, 1200) + "…" : raw);
+      } catch (_) {}
+      await sendMessage(chatId, lines.join("\n"));
+      return res.status(200).json({ ok: true });
+    }
+
     // ========== MB BANK GIAO DỊCH ==========
     if (
       lower === "/giaodich" ||
