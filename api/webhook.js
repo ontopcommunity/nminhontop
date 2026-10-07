@@ -347,6 +347,48 @@ module.exports = async function handler(req, res) {
     }
 
     // ========== MENU / HELP ==========
+    // ========== MB BANK GIAO DỊCH ==========
+    if (
+      lower === "/giaodich" ||
+      lower === "giaodich" ||
+      lower === "/gd" ||
+      lower.startsWith("/giaodich ")
+    ) {
+      let waitId = null;
+      try {
+        waitId = await sendWaiting(chatId, "⏳ Đang lấy lịch sử MB Bank...");
+        const r = await fetch("https://apimbbankvip.vercel.app/api/aduanhminh?rows=10", {
+          headers: { Accept: "application/json" },
+        });
+        const data = await r.json();
+        await clearWaiting(chatId, waitId);
+        if (data.status !== "success") {
+          await sendMessage(chatId, "❌ Lỗi MB: " + (data.msg || "unknown"));
+          return res.status(200).json({ ok: true });
+        }
+        const txs = data.transactions || [];
+        if (!txs.length) {
+          await sendMessage(chatId, "Không có giao dịch.");
+          return res.status(200).json({ ok: true });
+        }
+        const lines = txs.map((tx, i) => {
+          const l1 = tx.line1 || "";
+          const l2 = tx.line2 || "";
+          const l3 = tx.line3 || "";
+          return `${i + 1}. ${l1}\n${l2}${l3 ? "\n" + l3 : ""}`;
+        });
+        const range = data.range ? `\n(${data.range.from} → ${data.range.to})` : "";
+        await sendMessage(
+          chatId,
+          `📋 10 giao dịch gần nhất${range}\n\n` + lines.join("\n\n")
+        );
+      } catch (e) {
+        await clearWaiting(chatId, waitId);
+        await sendMessage(chatId, "❌ Lỗi: " + (e.message || String(e)));
+      }
+      return res.status(200).json({ ok: true });
+    }
+
     if (lower === "/start" || lower === "start" || lower === "menu") {
       await sendMessage(
         chatId,
