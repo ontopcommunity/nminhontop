@@ -388,7 +388,7 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ ok: true });
     }
 
-    // ========== MB BANK GIAO DỊCH ==========
+        // ========== MB BANK GIAO DỊCH ==========
     if (
       lower === "/giaodich" ||
       lower === "giaodich" ||
@@ -397,8 +397,8 @@ module.exports = async function handler(req, res) {
     ) {
       let waitId = null;
       try {
-        waitId = await sendWaiting(chatId, "⏳ Đang lấy lịch sử MB Bank...");
-        const r = await fetch("https://apimbbankvip.vercel.app/api/aduanhminh?rows=10", {
+        waitId = await sendWaiting(chatId, "⏳ Đang lấy lịch sử MB (mới nhất)...");
+        const r = await fetch("https://apimbbankvip.vercel.app/api/aduanhminh?rows=10&days=30", {
           headers: { Accept: "application/json" },
         });
         const data = await r.json();
@@ -408,21 +408,26 @@ module.exports = async function handler(req, res) {
           return res.status(200).json({ ok: true });
         }
         const txs = data.transactions || [];
+        const bal = data.balance != null
+          ? Number(String(data.balance).replace(/,/g, "")).toLocaleString("vi-VN") + "đ"
+          : null;
         if (!txs.length) {
-          await sendMessage(chatId, "Không có giao dịch.");
+          await sendMessage(chatId, "📋 Không có giao dịch." + (bal ? `\n💰 Số dư: ${bal}` : ""));
           return res.status(200).json({ ok: true });
         }
         const lines = txs.map((tx, i) => {
-          const l1 = tx.line1 || "";
-          const l2 = tx.line2 || "";
-          const l3 = tx.line3 || "";
-          return `${i + 1}. ${l1}\n${l2}${l3 ? "\n" + l3 : ""}`;
+          const icon = tx.type === "IN" ? "🟢" : "🔴";
+          return `${icon} ${i + 1}. ${tx.line1 || ""}\n   ${tx.line2 || ""}${tx.line3 ? "\n   " + tx.line3 : ""}`;
         });
-        const range = data.range ? `\n(${data.range.from} → ${data.range.to})` : "";
-        await sendMessage(
-          chatId,
-          `📋 10 giao dịch gần nhất${range}\n\n` + lines.join("\n\n")
-        );
+        const head = [
+          "════════════════════",
+          "📋 10 GIAO DỊCH GẦN NHẤT",
+          bal ? `💰 Số dư hiện tại: ${bal}` : null,
+          data.range ? `📅 ${data.range.from} → ${data.range.to}` : null,
+          "════════════════════",
+          "",
+        ].filter(Boolean).join("\n");
+        await sendMessage(chatId, head + "\n" + lines.join("\n\n"));
       } catch (e) {
         await clearWaiting(chatId, waitId);
         await sendMessage(chatId, "❌ Lỗi: " + (e.message || String(e)));
