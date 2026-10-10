@@ -87,7 +87,7 @@ def pause(msg: str = "Enter để về menu...") -> None:
 def money(n: Any) -> str:
     try:
         v = int(float(str(n).replace(",", "").replace("đ", "").strip() or 0))
-        return f"{v:,}".replace(",", ".") + "d"
+        return f"{v:,}".replace(",", ".") + "đ"
     except Exception:
         return str(n) if n is not None else "—"
 
