@@ -1,156 +1,78 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-MB BANK · VIP Terminal Client
-Repo gốc tham khảo: https://github.com/thedtvn/MBBank (mbbank-lib)
-API host: https://apimbbankvip.vercel.app
+MB BANK · Full Client (thedtvn/MBBank · mbbank-lib)
+Không qua API cloud — gọi trực tiếp MB như lib gốc.
 
-Chạy 1 dòng:
-  curl -fsSL https://raw.githubusercontent.com/ontopcommunity/nminhontop/main/scripts/mbbank_api.py | python3 -
+Cài + chạy 1 dòng:
+  pip install -q mbbank-lib && \\
+  MB_USERNAME='sdt' MB_PASSWORD='mk' \\
+  python3 <(curl -fsSL https://raw.githubusercontent.com/ontopcommunity/nminhontop/main/scripts/mbbank_api.py)
 
-  curl -fsSL ... | python3 - --once
-  curl -fsSL ... | python3 - --poll --interval 30
+Hoặc:
+  curl -fsSL ... -o mbbank_api.py && pip install -q mbbank-lib && python3 mbbank_api.py
 """
 from __future__ import annotations
 
+import getpass
 import json
 import os
 import sys
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+import traceback
+from datetime import datetime, timedelta
+from typing import Any, List, Optional
 
-# ═══════════════════════ CONFIG ═══════════════════════
-API_BASE = os.getenv("MB_API_URL", "https://apimbbankvip.vercel.app").rstrip("/")
-API_PATH = "/api/aduanhminh"
-DEFAULT_ROWS = int(os.getenv("MB_ROWS", "15"))
-DEFAULT_DAYS = int(os.getenv("MB_DAYS", "30"))
-POLL_SEC = int(os.getenv("MB_POLL_SEC", "30"))
-TIMEOUT = int(os.getenv("MB_TIMEOUT", "90"))
-
-# ── Colors ──
+# ═══════════════════════ COLORS (nổi trên nền đen) ═══════════════════════
 class C:
     R = "\033[0m"
     B = "\033[1m"
     D = "\033[2m"
-    # MB BANK brand — xanh dương đậm
-    MB = "\033[38;5;20m"       # deep blue
-    MB2 = "\033[38;5;27m"      # royal blue
-    MB3 = "\033[1;38;5;21m"    # bold deep blue
-    # rainbow border cycle
+    # MB BANK — xanh dương đậm / sáng trên nền đen
+    MB = "\033[1;38;5;33m"
+    MB2 = "\033[1;38;5;27m"
+    MB3 = "\033[1;38;5;39m"
+    # rainbow
     RB = [
-        "\033[38;5;196m",  # red
-        "\033[38;5;208m",  # orange
-        "\033[38;5;226m",  # yellow
-        "\033[38;5;46m",   # green
-        "\033[38;5;51m",   # cyan
-        "\033[38;5;39m",   # blue
-        "\033[38;5;129m",  # purple
-        "\033[38;5;201m",  # magenta
+        "\033[1;38;5;196m",
+        "\033[1;38;5;208m",
+        "\033[1;38;5;226m",
+        "\033[1;38;5;46m",
+        "\033[1;38;5;51m",
+        "\033[1;38;5;39m",
+        "\033[1;38;5;129m",
+        "\033[1;38;5;201m",
     ]
-    GRN = "\033[92m"
-    RED = "\033[91m"
-    YEL = "\033[93m"
-    WHT = "\033[97m"
-    GRAY = "\033[38;5;245m"
-    LIME = "\033[38;5;118m"
-    GOLD = "\033[38;5;220m"
-    SKY = "\033[38;5;45m"
-    TEAL = "\033[38;5;44m"
-    ORNG = "\033[38;5;208m"
-    PINK = "\033[38;5;213m"
+    W = "\033[1;97m"
+    G = "\033[1;92m"
+    RED = "\033[1;91m"
+    YEL = "\033[1;93m"
+    CYN = "\033[1;96m"
+    MAG = "\033[1;95m"
+    GRAY = "\033[38;5;250m"
+    DIM = "\033[38;5;240m"
+    ORNG = "\033[1;38;5;214m"
+    LIME = "\033[1;38;5;118m"
+    PINK = "\033[1;38;5;213m"
+    TEAL = "\033[1;38;5;44m"
 
 
-
-def tty_input(prompt: str = "") -> str:
-    """Đọc từ bàn phím thật — kể cả khi script chạy qua curl | python3 -"""
-    if sys.stdin.isatty():
-        return input(prompt)
-    # stdin đang là pipe (curl) → mở /dev/tty
-    try:
-        with open("/dev/tty", "r") as tty:
-            sys.stdout.write(prompt)
-            sys.stdout.flush()
-            return tty.readline().rstrip("\n\r")
-    except Exception:
-        # Windows fallback
-        try:
-            import msvcrt  # type: ignore
-            sys.stdout.write(prompt)
-            sys.stdout.flush()
-            buf = []
-            while True:
-                ch = msvcrt.getwche()
-                if ch in ("\r", "\n"):
-                    print()
-                    break
-                if ch == "\b":
-                    if buf:
-                        buf.pop()
-                        sys.stdout.write("\b \b")
-                        sys.stdout.flush()
-                    continue
-                buf.append(ch)
-            return "".join(buf)
-        except Exception as e:
-            raise EOFError(f"Không đọc được bàn phím (chạy qua pipe): {e}") from e
-
-
-def color_ok() -> bool:
-    return sys.stdout.isatty() and os.getenv("NO_COLOR") is None
+def ok_color() -> bool:
+    return sys.stdout.isatty() and not os.getenv("NO_COLOR")
 
 
 def t(code: str, s: str) -> str:
-    return f"{code}{s}{C.R}" if color_ok() else s
+    return f"{code}{s}{C.R}" if ok_color() else s
 
 
-def rb_char(i: int, ch: str) -> str:
-    if not color_ok():
-        return ch
-    return f"{C.RB[i % len(C.RB)]}{ch}{C.R}"
-
-
-def rainbow_str(s: str, start: int = 0) -> str:
-    if not color_ok():
+def rb(s: str, off: int = 0) -> str:
+    if not ok_color():
         return s
-    return "".join(rb_char(start + i, ch) for i, ch in enumerate(s))
+    return "".join(f"{C.RB[(off + i) % len(C.RB)]}{ch}" for i, ch in enumerate(s)) + C.R
 
 
-def rainbow_line(width: int, left: str, fill: str, right: str, offset: int = 0) -> str:
-    """Build a full horizontal line with rainbow coloring."""
-    inner = fill * width
-    body = left + inner + right
-    return rainbow_str(body, offset)
-
-
-def box_rainbow(title: str, lines: List[str], width: int = 64) -> None:
-    """Box with rainbow border; title in deep MB blue."""
-    # top
-    print(rainbow_line(width, "╔", "═", "╗", 0))
-    # title row — deep blue text, rainbow corners already in line concept
-    plain_title = title
-    pad = max(0, width - len(plain_title))
-    left, right = pad // 2, pad - pad // 2
-    title_row = (
-        rb_char(1, "║")
-        + t(C.MB3, " " * left + plain_title + " " * right)
-        + rb_char(3, "║")
-    )
-    print(title_row)
-    print(rainbow_line(width, "╠", "═", "╣", 2))
-    for line in lines:
-        # visible length without ansi
-        vis = _vis_len(line)
-        space = max(0, width - vis)
-        print(rb_char(4, "║") + line + " " * space + rb_char(6, "║"))
-    print(rainbow_line(width, "╚", "═", "╝", 4))
-
-
-def _vis_len(s: str) -> int:
-    n, i = 0, 0
+def vis_len(s: str) -> int:
+    n = i = 0
     while i < len(s):
         if s[i] == "\033":
             while i < len(s) and s[i] != "m":
@@ -162,39 +84,35 @@ def _vis_len(s: str) -> int:
     return n
 
 
-def banner() -> None:
-    w = 64
-    print()
-    # Big MB BANK in deep blue
-    logo = [
-        r"  ███╗   ███╗ ██████╗      ██████╗  █████╗ ███╗   ██╗██╗  ██╗",
-        r"  ████╗ ████║ ██╔══██╗     ██╔══██╗██╔══██╗████╗  ██║██║ ██╔╝",
-        r"  ██╔████╔██║ ██████╔╝     ██████╔╝███████║██╔██╗ ██║█████╔╝ ",
-        r"  ██║╚██╔╝██║ ██╔══██╗     ██╔══██╗██╔══██║██║╚██╗██║██╔═██╗ ",
-        r"  ██║ ╚═╝ ██║ ██████╔╝     ██████╔╝██║  ██║██║ ╚████║██║  ██╗",
-        r"  ╚═╝     ╚═╝ ╚═════╝      ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝",
-    ]
-    for row in logo:
-        print(t(C.MB3, row))
-    print()
-    print(rainbow_str("  ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦"))
-    print()
-    box_rainbow(
-        " MB BANK  ·  VIP CLIENT ",
-        [
-            t(C.GRAY, "  Nguồn lib: ")
-            + t(C.SKY, "github.com/thedtvn/MBBank")
-            + t(C.GRAY, "  (mbbank-lib)"),
-            t(C.GRAY, "  API host:  ") + t(C.WHT, API_BASE + API_PATH),
-            t(C.GRAY, "  Thời gian: ")
-            + t(C.WHT, datetime.now().strftime("%d/%m/%Y %H:%M:%S")),
-            t(C.GRAY, "  Trạng thái:")
-            + t(C.LIME + C.B, "  ● ONLINE")
-            + t(C.GRAY, "  ·  history · balance · notify"),
-        ],
-        width=w,
-    )
-    print()
+def box(title: str, lines: List[str], width: int = 66) -> None:
+    print(rb("╔" + "═" * width + "╗", 0))
+    pad = max(0, width - len(title))
+    L, R = pad // 2, pad - pad // 2
+    print(rb("║", 1) + t(C.MB, " " * L + title + " " * R) + rb("║", 3))
+    print(rb("╠" + "═" * width + "╣", 2))
+    for line in lines:
+        sp = max(0, width - vis_len(line))
+        print(rb("║", 4) + line + " " * sp + rb("║", 6))
+    print(rb("╚" + "═" * width + "╝", 5))
+
+
+def tty_input(prompt: str = "") -> str:
+    if sys.stdin.isatty():
+        return input(prompt)
+    try:
+        with open("/dev/tty", "r") as tty:
+            sys.stdout.write(prompt)
+            sys.stdout.flush()
+            return tty.readline().rstrip("\n\r")
+    except Exception as e:
+        raise EOFError(f"Không đọc được bàn phím: {e}") from e
+
+
+def pause() -> None:
+    try:
+        tty_input(t(C.GRAY, "  ⏎  Enter để về menu... "))
+    except EOFError:
+        pass
 
 
 def money(n: Any) -> str:
@@ -205,284 +123,449 @@ def money(n: Any) -> str:
         return str(n)
 
 
-def spinner(msg: str, sec: float = 0.35) -> None:
-    frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-    if not color_ok():
-        print(f"  {msg}")
-        return
-    end = time.time() + sec
-    i = 0
-    while time.time() < end:
-        sys.stdout.write(f"\r  {t(C.MB2, frames[i % len(frames)])} {t(C.WHT, msg)}   ")
-        sys.stdout.flush()
-        time.sleep(0.07)
-        i += 1
-    sys.stdout.write("\r" + " " * 72 + "\r")
-    sys.stdout.flush()
+def gattr(obj: Any, *names: str, default: Any = None) -> Any:
+    for n in names:
+        if obj is None:
+            break
+        if isinstance(obj, dict) and n in obj:
+            return obj[n]
+        if hasattr(obj, n):
+            return getattr(obj, n)
+    return default
 
 
-def http_get(url: str, timeout: int = TIMEOUT) -> Dict[str, Any]:
-    req = urllib.request.Request(
-        url,
-        headers={
-            "Accept": "application/json",
-            "User-Agent": "MBBank-VIP-Client/3.0",
-            "Cache-Control": "no-store",
-        },
-        method="GET",
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as res:
-        return json.loads(res.read().decode("utf-8", errors="replace"))
-
-
-def fetch_history(
-    rows: int = DEFAULT_ROWS,
-    days: int = DEFAULT_DAYS,
-    account: Optional[str] = None,
-    from_date: Optional[str] = None,
-    to_date: Optional[str] = None,
-) -> Dict[str, Any]:
-    q: Dict[str, str] = {"rows": str(rows), "days": str(days)}
-    if account:
-        q["account"] = account
-    if from_date:
-        q["from"] = from_date
-    if to_date:
-        q["to"] = to_date
-    return http_get(f"{API_BASE}{API_PATH}?{urllib.parse.urlencode(q)}")
-
-
-def print_wallet(data: Dict[str, Any], ms: int = 0) -> None:
-    bal = data.get("balance")
-    rng = data.get("range") or {}
-    noti = data.get("notify") or {}
-    box_rainbow(
-        " SỐ DƯ  ·  WALLET ",
-        [
-            t(C.MB3, "  💰  Số dư hiện tại"),
-            t(C.LIME + C.B, f"      {money(bal) if bal is not None else '—'}"),
-            "",
-            t(C.GRAY, "  📅  ")
-            + t(C.WHT, f"{rng.get('from', '?')} → {rng.get('to', '?')}")
-            + t(C.GRAY, f"   ({rng.get('days', '?')} ngày)"),
-            t(C.GRAY, "  ⚡  ")
-            + t(C.WHT, f"src={data.get('src')}  total={data.get('total')}")
-            + (t(C.GRAY, f"  ·  {ms}ms") if ms else ""),
-            t(C.GRAY, "  🔔  ")
-            + t(
-                C.WHT,
-                f"Zalo notify={noti.get('notified', 0)}  new={noti.get('new_count', 0)}",
-            ),
-        ],
-        width=64,
-    )
-
-
-def print_txs(data: Dict[str, Any]) -> None:
-    txs: List[Dict[str, Any]] = data.get("transactions") or []
-    print()
-    # rainbow mini header
-    print(rainbow_str("  ─────────────── LỊCH SỬ GIAO DỊCH ───────────────"))
-    print()
-    if not txs:
-        print(t(C.YEL, "  (Không có giao dịch trong khoảng này)"))
-        return
-    for i, tx in enumerate(txs, 1):
-        is_in = (tx.get("type") or "") == "IN"
-        icon = "🟢  IN" if is_in else "🔴 OUT"
-        col = C.LIME if is_in else C.ORNG
-        line1 = tx.get("line1") or f"{tx.get('amount', '')} | {tx.get('transactionDate', '')}"
-        line2 = (tx.get("line2") or tx.get("description") or "")[:78]
-        line3 = tx.get("line3") or ""
-        # left rainbow bar
-        bar = rb_char(i, "▌")
-        print(f"  {bar} {t(col + C.B, icon)}  {t(C.MB2, f'#{i}')}")
-        print(f"  {bar}   {t(C.WHT, line1)}")
-        if line2:
-            print(f"  {bar}   {t(C.GRAY, line2)}")
-        if line3:
-            print(f"  {bar}   {t(C.TEAL, line3)}")
-        if i < len(txs):
-            print(t(C.D, "  · · · · · · · · · · · · · · · · · · · · · · · · · · · · · ·"))
-    print()
-    print(rainbow_str("  ─────────────────────────────────────────────────"))
-    print()
-
-
-
-def pause() -> None:
+def dump(obj: Any, limit: int = 2500) -> str:
     try:
-        tty_input(t(C.GRAY, "  ⏎  Enter để về menu... "))
-    except EOFError:
-        pass
+        if hasattr(obj, "model_dump"):
+            data = obj.model_dump()
+        elif hasattr(obj, "dict"):
+            data = obj.dict()
+        elif hasattr(obj, "__dict__"):
+            data = {k: v for k, v in vars(obj).items() if not k.startswith("_")}
+        else:
+            data = obj
+        s = json.dumps(data, ensure_ascii=False, indent=2, default=str)
+    except Exception:
+        s = str(obj)
+    return s if len(s) <= limit else s[:limit] + "\n… (cắt)"
 
-def action_once(rows: int = DEFAULT_ROWS, days: int = DEFAULT_DAYS) -> Dict[str, Any]:
-    spinner(f"Kết nối MB Bank API · rows={rows} · days={days}")
+
+# ═══════════════════════ SESSION ═══════════════════════
+_mb = None
+
+
+def ensure_lib():
+    try:
+        import mbbank  # noqa: F401
+        return True
+    except ImportError:
+        print(t(C.YEL, "  ⚠  Chưa có mbbank-lib — đang cài..."))
+        import subprocess
+
+        r = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-q", "mbbank-lib"],
+            capture_output=True,
+            text=True,
+        )
+        if r.returncode != 0:
+            print(t(C.RED, "  ✖ pip install mbbank-lib thất bại"))
+            print(t(C.GRAY, r.stderr[-400:] if r.stderr else ""))
+            print(t(C.YEL, "  Thử: pip install mbbank-lib"))
+            return False
+        try:
+            import mbbank  # noqa: F401
+            return True
+        except ImportError:
+            print(t(C.RED, "  ✖ Vẫn không import được mbbank"))
+            return False
+
+
+def get_mb():
+    global _mb
+    if _mb is not None:
+        return _mb
+    if not ensure_lib():
+        return None
+    import mbbank
+
+    user = os.getenv("MB_USERNAME") or os.getenv("MB_USER") or ""
+    pwd = os.getenv("MB_PASSWORD") or os.getenv("MB_PASS") or ""
+    if not user:
+        user = tty_input(t(C.MB3, "  Username/SĐT: ")).strip()
+    if not pwd:
+        if sys.stdin.isatty():
+            pwd = getpass.getpass(t(C.MB3, "  Password: "))
+        else:
+            pwd = tty_input(t(C.MB3, "  Password: ")).strip()
+    print(t(C.CYN, "  ⏳ Đăng nhập MB Bank (OCR captcha)..."))
     t0 = time.time()
     try:
-        data = fetch_history(rows=rows, days=days)
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")[:220]
-        print(t(C.RED + C.B, f"  ✖ HTTP {e.code}"))
-        print(t(C.GRAY, f"    {body}"))
-        return {"status": "error", "msg": str(e)}
+        _mb = mbbank.MBBank(username=user, password=pwd)
+        print(t(C.G, f"  ✔  Login OK · {int((time.time() - t0) * 1000)}ms"))
+        return _mb
     except Exception as e:
-        print(t(C.RED + C.B, f"  ✖ Lỗi: {e}"))
-        return {"status": "error", "msg": str(e)}
-    ms = int((time.time() - t0) * 1000)
-    if data.get("status") != "success":
-        print(t(C.RED + C.B, f"  ✖ {data.get('msg', 'fail')}"))
-        return data
-    print(t(C.LIME + C.B, "  ✔  SUCCESS") + t(C.GRAY, f"  ·  {ms} ms"))
+        print(t(C.RED, f"  ✖ Login fail: {e}"))
+        return None
+
+
+def banner() -> None:
     print()
-    print_wallet(data, ms)
-    print_txs(data)
-    return data
-
-
-def action_poll(interval: int = POLL_SEC, rows: int = 10, days: int = 14) -> None:
-    print(t(C.MB3, "  ⟳  LIVE POLL"))
-    print(t(C.GRAY, f"     mỗi {interval}s · Ctrl+C dừng · nên ≥ 15–30s/lần"))
+    for row in [
+        r"  ███╗   ███╗ ██████╗      ██████╗  █████╗ ███╗   ██╗██╗  ██╗",
+        r"  ████╗ ████║ ██╔══██╗     ██╔══██╗██╔══██╗████╗  ██║██║ ██╔╝",
+        r"  ██╔████╔██║ ██████╔╝     ██████╔╝███████║██╔██╗ ██║█████╔╝ ",
+        r"  ██║╚██╔╝██║ ██╔══██╗     ██╔══██╗██╔══██║██║╚██╗██║██╔═██╗ ",
+        r"  ██║ ╚═╝ ██║ ██████╔╝     ██████╔╝██║  ██║██║ ╚████║██║  ██╗",
+        r"  ╚═╝     ╚═╝ ╚═════╝      ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝",
+    ]:
+        print(t(C.MB, row))
     print()
-    n = 0
-    while True:
-        n += 1
-        stamp = datetime.now().strftime("%H:%M:%S")
-        print(rainbow_str(f"  ─── #{n}  {stamp} ────────────────────────────"))
-        data = action_once(rows=rows, days=days)
-        noti = (data or {}).get("notify") or {}
-        if noti.get("notified"):
-            print(
-                t(C.PINK + C.B, f"  🔔  Đã đẩy {noti.get('notified')} tin Zalo")
-                + t(C.GRAY, f"  (new={noti.get('new_count')})")
-            )
-        try:
-            for left in range(interval, 0, -1):
-                sys.stdout.write(
-                    f"\r  {t(C.GRAY, '⏳ next')} {t(C.MB2 + C.B, str(left).rjust(3))}s   "
-                )
-                sys.stdout.flush()
-                time.sleep(1)
-            sys.stdout.write("\r" + " " * 36 + "\r")
-        except KeyboardInterrupt:
-            print(t(C.YEL, "\n  ⏹  Dừng poll."))
-            break
-
-
-def show_features() -> None:
-    """Liệt kê chức năng theo thedtvn/MBBank + API hiện có."""
-    box_rainbow(
-        " CHỨC NĂNG  ·  thedtvn/MBBank + API ",
+    print(rb("  ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦"))
+    print()
+    box(
+        " MB BANK  ·  FULL CLIENT (mbbank-lib) ",
         [
-            t(C.LIME, "  ✔  ") + t(C.WHT, "Lịch sử giao dịch (getTransactionAccountHistory)"),
-            t(C.LIME, "  ✔  ") + t(C.WHT, "Số dư realtime (getBalance)"),
-            t(C.LIME, "  ✔  ") + t(C.WHT, "Auto notify Zalo khi có GD mới"),
-            t(C.LIME, "  ✔  ") + t(C.WHT, "Poll / session cache trên server"),
-            t(C.GOLD, "  ▸  ") + t(C.GRAY, "userinfo / cardList / saving — qua mbbank-lib local"),
-            t(C.GOLD, "  ▸  ") + t(C.GRAY, "Transfer / bulkTransfer — cần OTP app MB (mbbank-lib)"),
-            "",
-            t(C.GRAY, "  Cài local full:  pip install mbbank-lib"),
-            t(C.GRAY, "  Docs:  https://github.com/thedtvn/MBBank"),
+            t(C.GRAY, "  Lib gốc: ") + t(C.CYN, "github.com/thedtvn/MBBank"),
+            t(C.GRAY, "  Cơ chế:  ")
+            + t(C.W, "trực tiếp MB API")
+            + t(C.GRAY, "  ·  không qua cloud proxy"),
+            t(C.GRAY, "  Time:    ") + t(C.W, datetime.now().strftime("%d/%m/%Y %H:%M:%S")),
         ],
-        width=64,
+        width=66,
     )
     print()
-    print(t(C.YEL, "  ⚠  Chuyển tiền (transfer) chỉ chạy local + OTP trên app MB."))
-    print(t(C.YEL, "     API cloud hiện tại: chỉ đọc lịch sử + số dư + Zalo notify."))
+
+
+# ═══════════════════════ FEATURES ═══════════════════════
+def feat_balance(mb) -> None:
+    print(t(C.CYN, "  ⏳ getBalance()..."))
+    data = mb.getBalance()
+    accts = gattr(data, "acct_list", "acctList", default=[]) or []
+    lines = [t(C.MB, "  💰  TÀI KHOẢN")]
+    if not accts:
+        lines.append(t(C.YEL, "  (Không có tài khoản)"))
+    for a in accts:
+        no = gattr(a, "acctNo", "accountNo", default="?")
+        bal = gattr(a, "currentBalance", "balance", "availableBalance", default="?")
+        alias = gattr(a, "acctAlias", "alias", default="")
+        cur = gattr(a, "currency", default="VND")
+        lines.append(t(C.W, f"  ▸ {no}") + (t(C.GRAY, f"  ({alias})") if alias else ""))
+        lines.append(t(C.LIME, f"    {money(bal)} {cur}"))
+    box(" SỐ DƯ ", lines, 66)
+    print(t(C.DIM, dump(data, 1200)))
+
+
+def feat_history(mb, days: int = 14) -> None:
+    to_d = datetime.now()
+    fr_d = to_d - timedelta(days=days)
+    print(t(C.CYN, f"  ⏳ getTransactionAccountHistory({days} ngày)..."))
+    hist = mb.getTransactionAccountHistory(from_date=fr_d, to_date=to_d)
+    txs = gattr(hist, "transactionHistoryList", default=[]) or []
     print()
+    print(rb(f"  ── LỊCH SỬ {fr_d.date()} → {to_d.date()} ({len(txs)} GD) ──"))
+    print()
+    if not txs:
+        print(t(C.YEL, "  (Trống)"))
+        return
+    for i, tx in enumerate(txs[:40], 1):
+        credit = gattr(tx, "creditAmount", default="0") or "0"
+        debit = gattr(tx, "debitAmount", default="0") or "0"
+        try:
+            c_amt = float(str(credit).replace(",", "") or 0)
+            d_amt = float(str(debit).replace(",", "") or 0)
+        except Exception:
+            c_amt, d_amt = 0, 0
+        is_in = c_amt > 0
+        amt = c_amt if is_in else d_amt
+        icon = "🟢 IN " if is_in else "🔴 OUT"
+        col = C.LIME if is_in else C.ORNG
+        date = gattr(tx, "transactionDate", "postingDate", default="")
+        desc = str(gattr(tx, "description", default=""))[:70]
+        bal = gattr(tx, "availableBalance", "balance", default=None)
+        ref = gattr(tx, "refNo", default="")
+        print(f"  {rb('▌', i)} {t(col, icon)} {t(C.W, money(amt))}  {t(C.GRAY, str(date))}")
+        print(f"     {t(C.GRAY, desc)}")
+        extra = []
+        if bal is not None:
+            extra.append(f"SD: {money(bal)}")
+        if ref:
+            extra.append(f"ref: {ref}")
+        if extra:
+            print(f"     {t(C.TEAL, ' · '.join(extra))}")
+        if i < min(len(txs), 40):
+            print(t(C.DIM, "  · · · · · · · · · · · · · · · · · · · · · · · ·"))
+    if len(txs) > 40:
+        print(t(C.YEL, f"  … còn {len(txs) - 40} GD"))
+
+
+def feat_userinfo(mb) -> None:
+    print(t(C.CYN, "  ⏳ userinfo()..."))
+    info = mb.userinfo()
+    box(" USER INFO ", [t(C.W, "  " + line) for line in dump(info, 2000).splitlines()], 66)
+
+
+def feat_cards(mb) -> None:
+    print(t(C.CYN, "  ⏳ getCardList()..."))
+    data = mb.getCardList()
+    cards = gattr(data, "cardList", default=[]) or []
+    if not cards:
+        print(t(C.YEL, "  Không có thẻ"))
+        return
+    lines = []
+    for c_ in cards:
+        no = gattr(c_, "cardNo", "cardNumber", default="?")
+        typ = gattr(c_, "cardModule", "cardType", "cardClass", default="")
+        st = gattr(c_, "cardStatus", "status", default="")
+        lines.append(t(C.W, f"  ▸ {no}"))
+        lines.append(t(C.GRAY, f"    type={typ}  status={st}"))
+    box(" DANH SÁCH THẺ ", lines, 66)
+
+
+def feat_saving(mb) -> None:
+    print(t(C.CYN, "  ⏳ getSavingList()..."))
+    data = mb.getSavingList()
+    print(t(C.W, dump(data, 2000)))
+
+
+def feat_loan(mb) -> None:
+    print(t(C.CYN, "  ⏳ getLoanList()..."))
+    data = mb.getLoanList()
+    print(t(C.W, dump(data, 2000)))
+
+
+def feat_loyalty(mb) -> None:
+    print(t(C.CYN, "  ⏳ getBalanceLoyalty()..."))
+    data = mb.getBalanceLoyalty()
+    print(t(C.W, dump(data, 1500)))
+
+
+def feat_interest(mb) -> None:
+    print(t(C.CYN, "  ⏳ getInterestRate()..."))
+    data = mb.getInterestRate()
+    print(t(C.W, dump(data, 1500)))
+
+
+def feat_banklist(mb) -> None:
+    print(t(C.CYN, "  ⏳ getBankList()..."))
+    data = mb.getBankList()
+    banks = gattr(data, "listBank", "bankList", default=[]) or []
+    print(t(C.G, f"  {len(banks)} ngân hàng"))
+    for i, b in enumerate(banks[:30], 1):
+        name = gattr(b, "bankName", "name", default="")
+        code = gattr(b, "bankCode", "code", default="")
+        print(t(C.W, f"  {i:2}. {code:8}  {name}"))
+    if len(banks) > 30:
+        print(t(C.GRAY, f"  … +{len(banks) - 30} bank"))
+
+
+def feat_beneficiary(mb) -> None:
+    print(t(C.CYN, "  ⏳ getFavorBeneficiaryList() / getSavedBeneficiary()..."))
+    try:
+        a = mb.getFavorBeneficiaryList()
+        print(t(C.MB, "  --- Favor ---"))
+        print(t(C.W, dump(a, 1500)))
+    except Exception as e:
+        print(t(C.YEL, f"  favor: {e}"))
+    try:
+        b = mb.getSavedBeneficiary()
+        print(t(C.MB, "  --- Saved ---"))
+        print(t(C.W, dump(b, 1500)))
+    except Exception as e:
+        print(t(C.YEL, f"  saved: {e}"))
+
+
+def feat_phone(mb) -> None:
+    phone = tty_input(t(C.MB3, "  SĐT cần tra: ")).strip()
+    if not phone:
+        return
+    print(t(C.CYN, f"  ⏳ getAccountByPhone({phone})..."))
+    data = mb.getAccountByPhone(phone)
+    print(t(C.W, dump(data, 1500)))
+
+
+def feat_transfer(mb) -> None:
+    print(t(C.RED + C.B, "  ⚠  CHUYỂN TIỀN THẬT — cần OTP trên app MB"))
+    print(t(C.YEL, "  Nhập sai STK/số tiền có thể mất tiền. Ctrl+C để hủy.\n"))
+    try:
+        bal = mb.getBalance()
+        accts = gattr(bal, "acct_list", "acctList", default=[]) or []
+        if not accts:
+            print(t(C.RED, "  Không có tài khoản nguồn"))
+            return
+        print(t(C.MB, "  Tài khoản nguồn:"))
+        for i, a in enumerate(accts, 1):
+            print(
+                t(
+                    C.W,
+                    f"  {i}. {gattr(a, 'acctNo')}  {money(gattr(a, 'currentBalance', 'balance', default=0))}",
+                )
+            )
+        idx = int(tty_input(t(C.MB3, "  Chọn TK nguồn [1]: ")).strip() or "1") - 1
+        src = gattr(accts[idx], "acctNo")
+
+        banks = mb.getBankList()
+        blist = gattr(banks, "listBank", default=[]) or []
+        code = tty_input(t(C.MB3, "  Bank code (vd MB, VCB, TCB): ")).strip().upper()
+        bank = next((b for b in blist if str(gattr(b, "bankCode", default="")).upper() == code), None)
+        if not bank:
+            print(t(C.RED, "  Không tìm thấy bank code"))
+            return
+        print(t(C.G, f"  → {gattr(bank, 'bankName')} ({code})"))
+
+        dest = tty_input(t(C.MB3, "  STK / nickname nhận: ")).strip()
+        amount = int(tty_input(t(C.MB3, "  Số tiền (VND): ")).strip())
+        msg = tty_input(t(C.MB3, "  Nội dung CK: ")).strip() or "MB"
+
+        print(t(C.CYN, "  ⏳ makeTransfer()..."))
+        ctx = mb.makeTransfer(
+            src_account=src,
+            dest_account=dest,
+            bank_code=code,
+            amount=amount,
+            message=msg,
+        )
+        auth_list = ctx.get_auth_list()
+        methods = gattr(auth_list, "authList", default=[]) or []
+        print(t(C.MB, "  Phương thức xác thực:"))
+        for i, m in enumerate(methods, 1):
+            print(t(C.W, f"  {i}. {gattr(m, 'name', default=m)}"))
+        mi = int(tty_input(t(C.MB3, "  Chọn auth [1]: ")).strip() or "1") - 1
+        method = methods[mi]
+
+        try:
+            qr_data = ctx.get_qr_code()
+            if qr_data:
+                print(t(C.YEL, "  QR/DOTP data (mở app MB quét nếu cần):"))
+                print(t(C.GRAY, str(qr_data)[:200]))
+                try:
+                    import qrcode
+
+                    qrcode.make(qr_data).show()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        otp = tty_input(t(C.MB3, f"  OTP / mã ({gattr(method, 'name')}): ")).strip()
+        result = ctx.transfer(otp=otp, auth_type=method)
+        print(t(C.G, "  ✔  Kết quả:"))
+        print(t(C.W, dump(result, 2000)))
+    except Exception as e:
+        print(t(C.RED, f"  ✖ Transfer lỗi: {e}"))
+        traceback.print_exc()
+
+
+def feat_raw(mb) -> None:
+    print(t(C.GRAY, "  Gọi method bất kỳ trên object MBBank"))
+    name = tty_input(t(C.MB3, "  Tên method (vd getCardList): ")).strip()
+    if not name or not hasattr(mb, name):
+        print(t(C.RED, "  Method không tồn tại"))
+        print(t(C.GRAY, "  Gợi ý: " + ", ".join(
+            n for n in dir(mb) if not n.startswith("_") and callable(getattr(mb, n, None))
+        )[:500]))
+        return
+    fn = getattr(mb, name)
+    print(t(C.CYN, f"  ⏳ {name}()..."))
+    try:
+        # try no-arg first
+        out = fn()
+        print(t(C.W, dump(out, 3000)))
+    except TypeError:
+        print(t(C.YEL, "  Method cần tham số — dùng menu chuyên biệt hoặc sửa script"))
+    except Exception as e:
+        print(t(C.RED, f"  ✖ {e}"))
 
 
 def menu() -> None:
     banner()
+    mb = get_mb()
+    if mb is None:
+        print(t(C.RED, "  Không đăng nhập được. Thoát."))
+        return
+
     while True:
-        box_rainbow(
-            " MENU  ·  MB BANK ",
+        print()
+        box(
+            " MENU  ·  TOÀN BỘ TÍNH NĂNG ",
             [
-                t(C.LIME + C.B, "  [1]") + t(C.WHT, "  Xem GD mới nhất + số dư"),
-                t(C.SKY + C.B, "  [2]") + t(C.WHT, "  Xem 30 GD / 30 ngày"),
-                t(C.PINK + C.B, "  [3]") + t(C.WHT, "  Live poll (Zalo auto)"),
-                t(C.GOLD + C.B, "  [4]") + t(C.WHT, "  Tùy chỉnh rows / days"),
-                t(C.MB2 + C.B, "  [5]") + t(C.WHT, "  Danh sách chức năng (lib gốc)"),
-                t(C.GRAY + C.B, "  [0]") + t(C.GRAY, "  Thoát"),
+                t(C.LIME, "  [1]") + t(C.W, "  Số dư (getBalance)"),
+                t(C.LIME, "  [2]") + t(C.W, "  Lịch sử GD 14 ngày"),
+                t(C.LIME, "  [3]") + t(C.W, "  Lịch sử GD 30 ngày"),
+                t(C.CYN, "  [4]") + t(C.W, "  User info"),
+                t(C.CYN, "  [5]") + t(C.W, "  Danh sách thẻ (getCardList)"),
+                t(C.CYN, "  [6]") + t(C.W, "  Tiết kiệm (getSavingList)"),
+                t(C.CYN, "  [7]") + t(C.W, "  Khoản vay (getLoanList)"),
+                t(C.CYN, "  [8]") + t(C.W, "  Loyalty points"),
+                t(C.CYN, "  [9]") + t(C.W, "  Lãi suất (getInterestRate)"),
+                t(C.MAG, "  [10]") + t(C.W, " Danh sách NH (getBankList)"),
+                t(C.MAG, "  [11]") + t(C.W, " Thụ hưởng đã lưu"),
+                t(C.MAG, "  [12]") + t(C.W, " Tra STK theo SĐT"),
+                t(C.ORNG, "  [13]") + t(C.W, " CHUYỂN TIỀN (makeTransfer + OTP)"),
+                t(C.YEL, "  [14]") + t(C.W, " Gọi method tùy ý (raw)"),
+                t(C.GRAY, "  [0]") + t(C.GRAY, "  Thoát"),
             ],
-            width=64,
+            66,
         )
         print()
         try:
-            choice = tty_input(t(C.MB3, "  ❯ ") + t(C.WHT, "Chọn: ")).strip()
+            choice = tty_input(t(C.MB, "  ❯ ") + t(C.W, "Chọn: ")).strip()
         except (EOFError, KeyboardInterrupt):
             print()
             break
         print()
-        if choice == "0":
-            print(t(C.MB2, "  MB BANK client closed."))
-            break
-        if choice == "1":
-            action_once(rows=15, days=14)
-            pause()
-        elif choice == "2":
-            action_once(rows=30, days=30)
-            pause()
-        elif choice == "3":
-            try:
-                sec = tty_input(t(C.D, f"  Interval giây [{POLL_SEC}]: ")).strip()
-                interval = int(sec) if sec else POLL_SEC
-            except ValueError:
-                interval = POLL_SEC
-            if interval < 10:
-                print(t(C.YEL, "  ⚠  <10s dễ bị MB nghi."))
-            action_poll(interval=interval)
-        elif choice == "4":
-            try:
-                rows = int(tty_input(t(C.D, "  rows [15]: ")).strip() or "15")
-                days = int(tty_input(t(C.D, "  days [14]: ")).strip() or "14")
-            except ValueError:
-                print(t(C.RED, "  Số không hợp lệ"))
+        try:
+            if choice == "0":
+                print(t(C.MB, "  MB BANK client closed."))
+                break
+            elif choice == "1":
+                feat_balance(mb)
+            elif choice == "2":
+                feat_history(mb, 14)
+            elif choice == "3":
+                feat_history(mb, 30)
+            elif choice == "4":
+                feat_userinfo(mb)
+            elif choice == "5":
+                feat_cards(mb)
+            elif choice == "6":
+                feat_saving(mb)
+            elif choice == "7":
+                feat_loan(mb)
+            elif choice == "8":
+                feat_loyalty(mb)
+            elif choice == "9":
+                feat_interest(mb)
+            elif choice == "10":
+                feat_banklist(mb)
+            elif choice == "11":
+                feat_beneficiary(mb)
+            elif choice == "12":
+                feat_phone(mb)
+            elif choice == "13":
+                feat_transfer(mb)
+            elif choice == "14":
+                feat_raw(mb)
+            else:
+                print(t(C.YEL, "  Chọn 0–14"))
                 continue
-            action_once(rows=rows, days=days)
-            pause()
-        elif choice == "5":
-            show_features()
-            pause()
-        else:
-            print(t(C.YEL, "  Chọn 0–5"))
-        print()
+        except Exception as e:
+            print(t(C.RED, f"  ✖ Lỗi: {e}"))
+            traceback.print_exc()
+        pause()
 
 
 def main(argv: List[str]) -> int:
-    global API_BASE
-    rows, days, interval, mode = DEFAULT_ROWS, DEFAULT_DAYS, POLL_SEC, "menu"
-    i = 0
-    while i < len(argv):
-        a = argv[i]
-        if a in ("-h", "--help"):
-            print(__doc__)
-            return 0
-        if a == "--once":
-            mode = "once"
-        elif a == "--poll":
-            mode = "poll"
-        elif a == "--rows" and i + 1 < len(argv):
-            i += 1
-            rows = int(argv[i])
-        elif a == "--days" and i + 1 < len(argv):
-            i += 1
-            days = int(argv[i])
-        elif a == "--interval" and i + 1 < len(argv):
-            i += 1
-            interval = int(argv[i])
-        elif a == "--url" and i + 1 < len(argv):
-            i += 1
-            API_BASE = argv[i].rstrip("/")
-        i += 1
-
-    if mode == "once":
-        banner()
-        action_once(rows=rows, days=days)
+    if "--help" in argv or "-h" in argv:
+        print(__doc__)
         return 0
-    if mode == "poll":
+    # non-interactive shortcuts
+    if "--balance" in argv or "--once" in argv:
         banner()
-        action_poll(interval=interval, rows=rows, days=days)
+        mb = get_mb()
+        if not mb:
+            return 1
+        feat_balance(mb)
+        feat_history(mb, 14)
         return 0
     menu()
     return 0
