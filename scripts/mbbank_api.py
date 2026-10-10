@@ -64,6 +64,41 @@ class C:
     PINK = "\033[38;5;213m"
 
 
+
+def tty_input(prompt: str = "") -> str:
+    """Đọc từ bàn phím thật — kể cả khi script chạy qua curl | python3 -"""
+    if sys.stdin.isatty():
+        return input(prompt)
+    # stdin đang là pipe (curl) → mở /dev/tty
+    try:
+        with open("/dev/tty", "r") as tty:
+            sys.stdout.write(prompt)
+            sys.stdout.flush()
+            return tty.readline().rstrip("\n\r")
+    except Exception:
+        # Windows fallback
+        try:
+            import msvcrt  # type: ignore
+            sys.stdout.write(prompt)
+            sys.stdout.flush()
+            buf = []
+            while True:
+                ch = msvcrt.getwche()
+                if ch in ("\r", "\n"):
+                    print()
+                    break
+                if ch == "\b":
+                    if buf:
+                        buf.pop()
+                        sys.stdout.write("\b \b")
+                        sys.stdout.flush()
+                    continue
+                buf.append(ch)
+            return "".join(buf)
+        except Exception as e:
+            raise EOFError(f"Không đọc được bàn phím (chạy qua pipe): {e}") from e
+
+
 def color_ok() -> bool:
     return sys.stdout.isatty() and os.getenv("NO_COLOR") is None
 
@@ -274,6 +309,13 @@ def print_txs(data: Dict[str, Any]) -> None:
     print()
 
 
+
+def pause() -> None:
+    try:
+        tty_input(t(C.GRAY, "  ⏎  Enter để về menu... "))
+    except EOFError:
+        pass
+
 def action_once(rows: int = DEFAULT_ROWS, days: int = DEFAULT_DAYS) -> Dict[str, Any]:
     spinner(f"Kết nối MB Bank API · rows={rows} · days={days}")
     t0 = time.time()
@@ -367,7 +409,7 @@ def menu() -> None:
         )
         print()
         try:
-            choice = input(t(C.MB3, "  ❯ ") + t(C.WHT, "Chọn: ")).strip()
+            choice = tty_input(t(C.MB3, "  ❯ ") + t(C.WHT, "Chọn: ")).strip()
         except (EOFError, KeyboardInterrupt):
             print()
             break
@@ -377,11 +419,13 @@ def menu() -> None:
             break
         if choice == "1":
             action_once(rows=15, days=14)
+            pause()
         elif choice == "2":
             action_once(rows=30, days=30)
+            pause()
         elif choice == "3":
             try:
-                sec = input(t(C.D, f"  Interval giây [{POLL_SEC}]: ")).strip()
+                sec = tty_input(t(C.D, f"  Interval giây [{POLL_SEC}]: ")).strip()
                 interval = int(sec) if sec else POLL_SEC
             except ValueError:
                 interval = POLL_SEC
@@ -390,14 +434,16 @@ def menu() -> None:
             action_poll(interval=interval)
         elif choice == "4":
             try:
-                rows = int(input(t(C.D, "  rows [15]: ")).strip() or "15")
-                days = int(input(t(C.D, "  days [14]: ")).strip() or "14")
+                rows = int(tty_input(t(C.D, "  rows [15]: ")).strip() or "15")
+                days = int(tty_input(t(C.D, "  days [14]: ")).strip() or "14")
             except ValueError:
                 print(t(C.RED, "  Số không hợp lệ"))
                 continue
             action_once(rows=rows, days=days)
+            pause()
         elif choice == "5":
             show_features()
+            pause()
         else:
             print(t(C.YEL, "  Chọn 0–5"))
         print()
