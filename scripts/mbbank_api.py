@@ -455,8 +455,7 @@ def fetch_and_show_history_all(mb, days: int = 30) -> None:
         unique.append(tx)
 
     ms = int((time.time() - t0) * 1000)
-    print(t(C.GRN, f"  Thành công — {ms} ms · {len(stk_list)} STK
-"))
+    print(t(C.GRN, "  Thành công — %s ms · %s STK\n" % (ms, len(stk_list))))
     show_history_ui(unique, total_bal, from_s, to_s, ms)
 
 
