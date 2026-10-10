@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 """
 MB BANK Client — by Ontop
-Toàn bộ tính năng mbbank-lib + giao diện terminal.
 """
 from __future__ import annotations
 
@@ -15,7 +14,6 @@ import traceback
 from datetime import datetime, timedelta
 from typing import Any, List, Optional, Tuple
 
-# ─────────── MÀU (nổi trên nền đen) ───────────
 class C:
     R = "\033[0m"
     B = "\033[1m"
@@ -28,6 +26,18 @@ class C:
     RED = "\033[1;91m"
     PINK = "\033[1;38;5;213m"
     TEAL = "\033[1;38;5;44m"
+    ORNG = "\033[1;38;5;214m"
+    LIME = "\033[1;38;5;118m"
+    RB = [
+        "\033[1;38;5;196m",
+        "\033[1;38;5;208m",
+        "\033[1;38;5;226m",
+        "\033[1;38;5;46m",
+        "\033[1;38;5;51m",
+        "\033[1;38;5;39m",
+        "\033[1;38;5;129m",
+        "\033[1;38;5;201m",
+    ]
 
 
 def uc() -> bool:
@@ -36,6 +46,12 @@ def uc() -> bool:
 
 def t(c: str, s: str) -> str:
     return f"{c}{s}{C.R}" if uc() else s
+
+
+def rb(s: str, off: int = 0) -> str:
+    if not uc():
+        return s
+    return "".join(f"{C.RB[(off + i) % len(C.RB)]}{ch}" for i, ch in enumerate(s)) + C.R
 
 
 def clear() -> None:
@@ -93,7 +109,25 @@ def vis_len(s: str) -> int:
     return n
 
 
-# ─────────── LOGO ───────────
+# ── khung cầu vồng ──
+def box(title: str, lines: List[str], width: int = 64) -> None:
+    print(rb("  ╔" + "═" * width + "╗", 0))
+    pad = max(0, width - len(title))
+    L, R = pad // 2, pad - pad // 2
+    print(rb("  ║", 1) + t(C.MB, " " * L + title + " " * R) + rb("║", 3))
+    print(rb("  ╠" + "═" * width + "╣", 2))
+    for line in lines:
+        sp = max(0, width - vis_len(line))
+        print(rb("  ║", 4) + line + " " * sp + rb("║", 6))
+    print(rb("  ╚" + "═" * width + "╝", 5))
+
+
+def section(title: str) -> None:
+    print()
+    print(rb("  ─ " + title + " " + "─" * max(0, 40 - len(title))))
+    print()
+
+
 def logo() -> None:
     print()
     for row in [
@@ -106,25 +140,19 @@ def logo() -> None:
     ]:
         print(t(C.MB, row))
     print()
-    print(t(C.PINK + C.B, "  MB BANK CLIENT") + t(C.GRAY, "  v2.0"))
-    print(t(C.GRN, "  TRỰC TUYẾN: ") + t(C.W, "by Ontop"))
-    print()
-
-
-def section(title: str) -> None:
-    print()
-    print(t(C.CYN, "  ─ " + title + " " + "─" * max(0, 42 - len(title))))
+    print(rb("  ✦  by Ontop  ✦"))
+    print(t(C.GRAY, f"  {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"))
     print()
 
 
 def draw_menu(title: str, left: List[Tuple[str, str]], right: List[Tuple[str, str]]) -> None:
     w = 64
     half = w // 2 - 1
-    print(t(C.CYN, "  ╔" + "═" * w + "╗"))
+    print(rb("  ╔" + "═" * w + "╗", 0))
     pad = max(0, w - len(title))
     L, R = pad // 2, pad - pad // 2
-    print(t(C.CYN, "  ║") + t(C.PINK + C.B, " " * L + title + " " * R) + t(C.CYN, "║"))
-    print(t(C.CYN, "  ╠" + "═" * half + "╦" + "═" * (w - half) + "╣"))
+    print(rb("  ║", 1) + t(C.MB, " " * L + title + " " * R) + rb("║", 3))
+    print(rb("  ╠" + "═" * half + "╦" + "═" * (w - half) + "╣", 2))
     rows = max(len(left), len(right))
     for i in range(rows):
         l = left[i] if i < len(left) else ("", "")
@@ -133,20 +161,13 @@ def draw_menu(title: str, left: List[Tuple[str, str]], right: List[Tuple[str, st
         rc = (t(C.CYN, f"{r[0]:>2}") + t(C.W, f" {r[1]}")) if r[0] else ""
         lp = max(0, half - vis_len(lc))
         rp = max(0, w - half - vis_len(rc))
-        print(
-            t(C.CYN, "  ║")
-            + lc
-            + " " * lp
-            + t(C.CYN, "│")
-            + rc
-            + " " * rp
-            + t(C.CYN, "║")
-        )
-    print(t(C.CYN, "  ╚" + "═" * half + "╩" + "═" * (w - half) + "╝"))
+        print(rb("  ║", 4) + lc + " " * lp + rb("│", 5) + rc + " " * rp + rb("║", 6))
+    print(rb("  ╚" + "═" * half + "╩" + "═" * (w - half) + "╝", 7))
 
 
 # ─────────── SESSION ───────────
 _mb = None
+_default_stk: Optional[str] = None
 
 
 def ensure_lib() -> bool:
@@ -171,7 +192,7 @@ def ensure_lib() -> bool:
 
 
 def login():
-    global _mb
+    global _mb, _default_stk
     if _mb is not None:
         return _mb
     if not ensure_lib():
@@ -192,6 +213,21 @@ def login():
     try:
         _mb = mbbank.MBBank(username=user, password=pwd)
         print(t(C.GRN, f"  Đăng nhập thành công ({int((time.time() - t0) * 1000)} ms)"))
+        # STK mặc định = TK đăng nhập (STK đầu tiên)
+        try:
+            accts = get_accounts(_mb)
+            if accts:
+                _default_stk = str(g(accts[0], "acctNo", "accountNo", default="") or "")
+                # ưu tiên STK trùng username nếu có
+                for a in accts:
+                    no = str(g(a, "acctNo", "accountNo", default="") or "")
+                    if no and (no == user or no.endswith(user[-9:] if len(user) >= 9 else user)):
+                        _default_stk = no
+                        break
+        except Exception:
+            _default_stk = user
+        if _default_stk:
+            print(t(C.GRAY, f"  STK mặc định: {_default_stk}"))
         return _mb
     except Exception as e:
         print(t(C.RED, f"  Đăng nhập thất bại: {e}"))
@@ -203,41 +239,98 @@ def get_accounts(mb) -> List[Any]:
     return list(g(data, "acct_list", "acctList", default=[]) or [])
 
 
-# ─────────── LỊCH SỬ GD (style bảng sạch, không icon, không JSON) ───────────
-def show_history(mb, account_no: Optional[str], days: int = 90) -> None:
+def default_stk(mb) -> Optional[str]:
+    global _default_stk
+    if _default_stk:
+        return _default_stk
+    accts = get_accounts(mb)
+    if accts:
+        _default_stk = str(g(accts[0], "acctNo", "accountNo", default="") or "") or None
+    return _default_stk
+
+
+# ═══════════════════════════════════════════════════════════
+# GIAO DIỆN LỊCH SỬ — y chang bản API cũ
+# (line1 / line2 / line3 · wallet card · không JSON · không icon)
+# ═══════════════════════════════════════════════════════════
+def show_wallet(balance: Any, from_d: str, to_d: str, total: int, ms: int = 0) -> None:
+    lines = [
+        t(C.MB, "  Số dư hiện tại"),
+        t(C.LIME + C.B, f"      {money(balance)}"),
+        "",
+        t(C.GRAY, "  Khoảng  ") + t(C.W, f"{from_d} → {to_d}"),
+        t(C.GRAY, "  Tổng GD ") + t(C.W, str(total)) + (t(C.GRAY, f"  ·  {ms} ms") if ms else ""),
+    ]
+    box(" SỐ DƯ ", lines, 64)
+
+
+def show_history_ui(txs: List[dict], balance: Any, from_d: str, to_d: str, ms: int = 0) -> None:
+    """
+    Giao diện lịch sử bản API cũ:
+      line1: ±số tiền | thời gian
+      line2: nội dung
+      line3: Số dư: ...
+    """
+    show_wallet(balance, from_d, to_d, len(txs), ms)
+    print()
+    print(rb("  ─────────────── LỊCH SỬ GIAO DỊCH ───────────────"))
+    print()
+    if not txs:
+        print(t(C.YEL, "  (Không có giao dịch)"))
+        print()
+        print(rb("  ─────────────────────────────────────────────────"))
+        return
+
+    for i, tx in enumerate(txs, 1):
+        is_in = tx.get("type") == "IN"
+        col = C.LIME if is_in else C.ORNG
+        sign = "+" if is_in else "−"
+        amt = money(tx.get("amount"))
+        date = tx.get("date") or ""
+        desc = (tx.get("desc") or "")[:80]
+        bal = tx.get("bal")
+        line1 = f"{sign}{amt} | {date}"
+        line2 = desc
+        line3 = f"Số dư: {money(bal)}" if bal is not None else ""
+
+        bar = rb("▌", i)
+        print(f"  {bar} {t(col + C.B, f'#{i}')}")
+        print(f"  {bar}   {t(C.W, line1)}")
+        if line2:
+            print(f"  {bar}   {t(C.GRAY, line2)}")
+        if line3:
+            print(f"  {bar}   {t(C.TEAL, line3)}")
+        if i < len(txs):
+            print(t(C.GRAY, "  · · · · · · · · · · · · · · · · · · · · · · · · · · · · · ·"))
+    print()
+    print(rb("  ─────────────────────────────────────────────────"))
+    print(t(C.GRAY, f"  Tổng: {len(txs)} giao dịch"))
+
+
+def fetch_and_show_history(mb, account_no: Optional[str], days: int = 30) -> None:
     to_d = datetime.now()
     fr_d = to_d - timedelta(days=min(max(days, 1), 90))
-    print(
-        t(
-            C.YEL,
-            f"  Đang lấy lịch sử {fr_d.strftime('%d/%m/%Y')} → {to_d.strftime('%d/%m/%Y')}...",
-        )
-    )
+    from_s = fr_d.strftime("%d/%m/%Y")
+    to_s = to_d.strftime("%d/%m/%Y")
+    stk = account_no or default_stk(mb)
+    print(t(C.YEL, f"  Đang lấy lịch sử STK {stk or 'mặc định'} · {from_s} → {to_s}..."))
+    t0 = time.time()
     try:
         try:
             hist = mb.getTransactionAccountHistory(
-                from_date=fr_d, to_date=to_d, accountNo=account_no
+                from_date=fr_d, to_date=to_d, accountNo=stk
             )
         except TypeError:
             hist = mb.getTransactionAccountHistory(from_date=fr_d, to_date=to_d)
     except Exception as e:
         print(t(C.RED, f"  Lỗi lấy lịch sử: {e}"))
         return
+    ms = int((time.time() - t0) * 1000)
 
-    txs = list(g(hist, "transactionHistoryList", default=[]) or [])
-    section(f"LỊCH SỬ GIAO DỊCH  ·  STK {account_no or 'mặc định'}  ·  {len(txs)} GD")
-    if not txs:
-        print(t(C.YEL, "  (Không có giao dịch)"))
-        return
-
-    print(
-        t(
-            C.GRAY,
-            f"  {'#':<4}{'Loại':<6}{'Số tiền':<16}{'Thời gian':<22}Nội dung",
-        )
-    )
-    print(t(C.CYN, "  " + "─" * 70))
-    for i, tx in enumerate(txs, 1):
+    raw = list(g(hist, "transactionHistoryList", default=[]) or [])
+    txs = []
+    balance = None
+    for tx in raw:
         credit = str(g(tx, "creditAmount", default="0") or "0").replace(",", "")
         debit = str(g(tx, "debitAmount", default="0") or "0").replace(",", "")
         try:
@@ -247,25 +340,37 @@ def show_history(mb, account_no: Optional[str], days: int = 90) -> None:
             c_amt, d_amt = 0.0, 0.0
         is_in = c_amt > 0
         amt = c_amt if is_in else d_amt
-        label = "VÀO" if is_in else "RA"
-        col = C.GRN if is_in else C.YEL
-        sign = "+" if is_in else "-"
-        date = str(g(tx, "transactionDate", "postingDate", default=""))[:19]
-        desc = str(g(tx, "description", default=""))[:40]
         bal = g(tx, "availableBalance", "balance", default=None)
-        print(
-            t(col, f"  {i:<4}{label:<6}{sign}{money(amt):<15}")
-            + t(C.W, f"{date:<22}")
-            + t(C.GRAY, desc)
+        if bal is not None and balance is None:
+            balance = bal
+        txs.append(
+            {
+                "type": "IN" if is_in else "OUT",
+                "amount": amt,
+                "date": str(g(tx, "transactionDate", "postingDate", default=""))[:19],
+                "desc": str(g(tx, "description", default="")),
+                "bal": bal,
+            }
         )
-        if bal is not None:
-            print(t(C.TEAL, f"      Số dư sau GD: {money(bal)}"))
-    print(t(C.CYN, "  " + "─" * 70))
-    print(t(C.GRAY, f"  Tổng: {len(txs)} giao dịch (tối đa ~90 ngày theo MB)"))
+    # số dư realtime nếu có
+    try:
+        for a in get_accounts(mb):
+            no = str(g(a, "acctNo", "accountNo", default="") or "")
+            if stk and no == str(stk):
+                balance = g(a, "currentBalance", "balance", "availableBalance", default=balance)
+                break
+        if balance is None and get_accounts(mb):
+            balance = g(get_accounts(mb)[0], "currentBalance", "balance", default=None)
+    except Exception:
+        pass
+
+    print(t(C.GRN, f"  Thành công — {ms} ms\n"))
+    show_history_ui(txs, balance, from_s, to_s, ms)
 
 
-# ─────────── 01 SỐ DƯ + CHỌN STK ───────────
-def feat_balance(mb) -> None:
+# ─────────── TÍNH NĂNG ───────────
+def feat_balance_pick(mb) -> None:
+    """01 — chọn STK bất kỳ rồi xem lịch sử"""
     while True:
         clear()
         logo()
@@ -281,19 +386,21 @@ def feat_balance(mb) -> None:
             pause()
             return
 
+        lines = []
         for i, a in enumerate(accts, 1):
             no = g(a, "acctNo", "accountNo", default="?")
             bal = g(a, "currentBalance", "balance", "availableBalance", default=0)
             alias = g(a, "acctAlias", "alias", default="") or ""
             cur = g(a, "currency", default="VND")
-            print(t(C.CYN, f"  {i:02}") + t(C.W, f"  STK: {no}"))
+            lines.append(t(C.CYN, f"  {i:02}") + t(C.W, f"  STK: {no}"))
             if alias:
-                print(t(C.GRAY, f"      Tên: {alias}"))
-            print(t(C.GRN + C.B, f"      Số dư: {money(bal)} {cur}"))
-            print()
-
+                lines.append(t(C.GRAY, f"      Tên: {alias}"))
+            lines.append(t(C.LIME + C.B, f"      Số dư: {money(bal)} {cur}"))
+            lines.append("")
+        box(" DANH SÁCH TÀI KHOẢN ", lines, 64)
+        print()
         print(t(C.W, "  Nhập số STK để xem lịch sử (từ trước đến nay)"))
-        print(t(C.GRAY, "  Enter (trống) để quay về menu chính"))
+        print(t(C.GRAY, "  Enter (trống) quay về menu chính"))
         print()
         choice = tty_input(t(C.CYN, "  Chọn STK (0): ")).strip()
         if not choice or choice == "0":
@@ -308,20 +415,19 @@ def feat_balance(mb) -> None:
             print(t(C.RED, "  Hãy nhập số"))
             time.sleep(1)
             continue
-
         stk = g(accts[idx], "acctNo", "accountNo", default=None)
         clear()
         logo()
-        show_history(mb, stk, days=90)
+        fetch_and_show_history(mb, stk, days=90)
         pause("Nhấn Enter để chọn STK khác...")
 
 
 def feat_history_days(mb, days: int) -> None:
+    """02/03/04 — luôn dùng STK mặc định khi đăng nhập"""
     clear()
     logo()
-    accts = get_accounts(mb)
-    stk = g(accts[0], "acctNo", default=None) if accts else None
-    show_history(mb, stk, days=days)
+    stk = default_stk(mb)
+    fetch_and_show_history(mb, stk, days=days)
     pause()
 
 
@@ -331,32 +437,30 @@ def feat_user(mb) -> None:
     section("THÔNG TIN NGƯỜI DÙNG")
     try:
         info = mb.userinfo()
-        labels = [
+        lines = []
+        for label, *keys in [
             ("Họ tên", "custName", "name", "fullName"),
             ("SĐT", "phone", "mobile", "phoneNumber"),
             ("Email", "email"),
             ("CIF", "cif", "cifNumber"),
             ("CMND/CCCD", "idNumber", "nationalId"),
-        ]
-        shown = False
-        for label, *keys in labels:
+        ]:
             val = g(info, *keys, default=None)
             if val is not None and str(val).strip():
-                print(t(C.CYN, f"  {label:<12}") + t(C.W, str(val)))
-                shown = True
-        if not shown:
+                lines.append(t(C.CYN, f"  {label:<12}") + t(C.W, str(val)))
+        if not lines:
             for k in dir(info):
                 if k.startswith("_"):
                     continue
                 try:
                     v = getattr(info, k)
                     if isinstance(v, (str, int, float)) and not callable(v):
-                        print(t(C.CYN, f"  {k:<16}") + t(C.W, str(v)))
-                        shown = True
+                        lines.append(t(C.CYN, f"  {k:<16}") + t(C.W, str(v)))
                 except Exception:
                     pass
-        if not shown:
-            print(t(C.YEL, "  (Không đọc được thông tin)"))
+        if not lines:
+            lines = [t(C.YEL, "  (Không đọc được thông tin)")]
+        box(" THÔNG TIN ", lines, 64)
     except Exception as e:
         print(t(C.RED, f"  Lỗi: {e}"))
     pause()
@@ -369,15 +473,17 @@ def feat_cards(mb) -> None:
     try:
         data = mb.getCardList()
         cards = list(g(data, "cardList", default=[]) or [])
+        lines = []
         if not cards:
-            print(t(C.YEL, "  Không có thẻ"))
+            lines.append(t(C.YEL, "  Không có thẻ"))
         for i, c_ in enumerate(cards, 1):
             no = g(c_, "cardNo", "cardNumber", default="?")
             typ = g(c_, "cardModule", "cardType", "cardClass", default="")
             st = g(c_, "cardStatus", "status", default="")
-            print(t(C.CYN, f"  {i:02}") + t(C.W, f"  {no}"))
-            print(t(C.GRAY, f"      Loại: {typ}  |  Trạng thái: {st}"))
-            print()
+            lines.append(t(C.CYN, f"  {i:02}") + t(C.W, f"  {no}"))
+            lines.append(t(C.GRAY, f"      Loại: {typ}  |  Trạng thái: {st}"))
+            lines.append("")
+        box(" THẺ ", lines, 64)
     except Exception as e:
         print(t(C.RED, f"  Lỗi: {e}"))
     pause()
@@ -402,16 +508,18 @@ def feat_saving(mb) -> None:
                 if isinstance(v, list) and v:
                     items = v
                     break
+        lines = []
         if not items:
-            print(t(C.YEL, "  Không có sổ tiết kiệm"))
+            lines.append(t(C.YEL, "  Không có sổ tiết kiệm"))
         for i, s in enumerate(items, 1):
             no = g(s, "accNo", "acctNo", "accountNo", default="?")
             bal = g(s, "balance", "currentBalance", "amount", default="")
-            print(
+            lines.append(
                 t(C.CYN, f"  {i:02}")
                 + t(C.W, f"  {no}  ")
-                + t(C.GRN, money(bal) if bal != "" else "")
+                + t(C.LIME, money(bal) if bal != "" else "")
             )
+        box(" TIẾT KIỆM ", lines, 64)
     except Exception as e:
         print(t(C.RED, f"  Lỗi: {e}"))
     pause()
@@ -424,16 +532,18 @@ def feat_loan(mb) -> None:
     try:
         data = mb.getLoanList()
         items = list(g(data, "loanList", "list", default=[]) or [])
+        lines = []
         if not items:
-            print(t(C.YEL, "  Không có khoản vay"))
+            lines.append(t(C.YEL, "  Không có khoản vay"))
         for i, s in enumerate(items, 1):
             no = g(s, "loanNo", "accNo", "acctNo", default="?")
             amt = g(s, "amount", "balance", "outstanding", default="")
-            print(
+            lines.append(
                 t(C.CYN, f"  {i:02}")
                 + t(C.W, f"  {no}  ")
-                + t(C.YEL, money(amt) if amt != "" else "")
+                + t(C.ORNG, money(amt) if amt != "" else "")
             )
+        box(" KHOẢN VAY ", lines, 64)
     except Exception as e:
         print(t(C.RED, f"  Lỗi: {e}"))
     pause()
@@ -445,16 +555,20 @@ def feat_loyalty(mb) -> None:
     section("LOYALTY / ĐIỂM")
     try:
         data = mb.getBalanceLoyalty()
+        lines = []
         pts = g(data, "point", "balance", "loyaltyPoint", "totalPoint", default=None)
         if pts is not None:
-            print(t(C.GRN + C.B, f"  Điểm: {pts}"))
+            lines.append(t(C.LIME + C.B, f"  Điểm: {pts}"))
         else:
             for k in dir(data):
                 if k.startswith("_"):
                     continue
                 v = getattr(data, k, None)
                 if isinstance(v, (int, float, str)) and not callable(v):
-                    print(t(C.CYN, f"  {k:<20}") + t(C.W, str(v)))
+                    lines.append(t(C.CYN, f"  {k:<20}") + t(C.W, str(v)))
+        if not lines:
+            lines.append(t(C.YEL, "  (Trống)"))
+        box(" LOYALTY ", lines, 64)
     except Exception as e:
         print(t(C.RED, f"  Lỗi: {e}"))
     pause()
@@ -466,18 +580,22 @@ def feat_interest(mb) -> None:
     section("LÃI SUẤT")
     try:
         data = mb.getInterestRate()
+        lines = []
         for k in dir(data):
             if k.startswith("_"):
                 continue
             v = getattr(data, k, None)
             if isinstance(v, (int, float, str)) and not callable(v):
-                print(t(C.CYN, f"  {k:<20}") + t(C.W, str(v)))
+                lines.append(t(C.CYN, f"  {k:<20}") + t(C.W, str(v)))
             elif isinstance(v, list) and v:
-                print(t(C.W, f"  {k}: {len(v)} mục"))
-                for i, item in enumerate(v[:15], 1):
-                    name = g(item, "name", "productName", "type", default=str(item)[:40])
+                lines.append(t(C.W, f"  {k}: {len(v)} mục"))
+                for i, item in enumerate(v[:12], 1):
+                    name = g(item, "name", "productName", "type", default=str(item)[:36])
                     rate = g(item, "rate", "interestRate", default="")
-                    print(t(C.GRAY, f"    {i:02}  {name}  {rate}"))
+                    lines.append(t(C.GRAY, f"    {i:02}  {name}  {rate}"))
+        if not lines:
+            lines.append(t(C.YEL, "  (Trống)"))
+        box(" LÃI SUẤT ", lines, 64)
     except Exception as e:
         print(t(C.RED, f"  Lỗi: {e}"))
     pause()
@@ -490,11 +608,14 @@ def feat_banks(mb) -> None:
     try:
         data = mb.getBankList()
         banks = list(g(data, "listBank", "bankList", default=[]) or [])
-        print(t(C.GRN, f"  Tổng: {len(banks)} ngân hàng\n"))
-        for i, b in enumerate(banks, 1):
+        lines = [t(C.GRN, f"  Tổng: {len(banks)} ngân hàng"), ""]
+        for i, b in enumerate(banks[:40], 1):
             code = g(b, "bankCode", "code", default="")
             name = g(b, "bankName", "name", default="")
-            print(t(C.CYN, f"  {i:03}") + t(C.W, f"  {str(code):<8}  {name}"))
+            lines.append(t(C.CYN, f"  {i:03}") + t(C.W, f"  {str(code):<8}  {name}"))
+        if len(banks) > 40:
+            lines.append(t(C.GRAY, f"  … +{len(banks) - 40} ngân hàng"))
+        box(" NGÂN HÀNG ", lines, 64)
     except Exception as e:
         print(t(C.RED, f"  Lỗi: {e}"))
     pause()
@@ -512,15 +633,17 @@ def feat_beneficiary(mb) -> None:
         items = list(
             g(data, "beneficiaries", "list", "favorBeneficiaryList", default=[]) or []
         )
+        lines = []
         if not items:
-            print(t(C.YEL, "  Không có thụ hưởng / danh sách trống"))
+            lines.append(t(C.YEL, "  Không có thụ hưởng / danh sách trống"))
         for i, b in enumerate(items, 1):
             name = g(b, "beneficiariesName", "name", "accountName", default="")
             acc = g(b, "accountNo", "acctNo", default="")
             bk = g(b, "bankName", "bankCode", default="")
-            print(t(C.CYN, f"  {i:02}") + t(C.W, f"  {name}"))
-            print(t(C.GRAY, f"      STK: {acc}  |  {bk}"))
-            print()
+            lines.append(t(C.CYN, f"  {i:02}") + t(C.W, f"  {name}"))
+            lines.append(t(C.GRAY, f"      STK: {acc}  |  {bk}"))
+            lines.append("")
+        box(" THỤ HƯỞNG ", lines, 64)
     except Exception as e:
         print(t(C.RED, f"  Lỗi: {e}"))
     pause()
@@ -535,21 +658,24 @@ def feat_phone(mb) -> None:
         return
     try:
         data = mb.getAccountByPhone(phone)
+        lines = []
         name = g(data, "accountName", "name", "custName", default="")
         acc = g(data, "accountNo", "acctNo", default="")
         bank = g(data, "bankName", "bankCode", default="")
-        print()
         if name or acc:
-            print(t(C.CYN, "  Tên TK : ") + t(C.W, str(name)))
-            print(t(C.CYN, "  STK    : ") + t(C.W, str(acc)))
-            print(t(C.CYN, "  NH     : ") + t(C.W, str(bank)))
+            lines.append(t(C.CYN, "  Tên TK : ") + t(C.W, str(name)))
+            lines.append(t(C.CYN, "  STK    : ") + t(C.W, str(acc)))
+            lines.append(t(C.CYN, "  NH     : ") + t(C.W, str(bank)))
         else:
             for k in dir(data):
                 if k.startswith("_"):
                     continue
                 v = getattr(data, k, None)
                 if isinstance(v, (str, int, float)) and v:
-                    print(t(C.CYN, f"  {k:<16}") + t(C.W, str(v)))
+                    lines.append(t(C.CYN, f"  {k:<16}") + t(C.W, str(v)))
+        if not lines:
+            lines.append(t(C.YEL, "  (Không có dữ liệu)"))
+        box(" KẾT QUẢ ", lines, 64)
     except Exception as e:
         print(t(C.RED, f"  Lỗi: {e}"))
     pause()
@@ -580,7 +706,6 @@ def feat_transfer(mb) -> None:
         dest = tty_input(t(C.CYN, "  STK nhận: ")).strip()
         amount = int(tty_input(t(C.CYN, "  Số tiền: ")).strip())
         msg = tty_input(t(C.CYN, "  Nội dung: ")).strip() or "CK"
-
         print(t(C.YEL, "  Đang tạo lệnh chuyển..."))
         ctx = mb.makeTransfer(
             src_account=src,
@@ -596,8 +721,7 @@ def feat_transfer(mb) -> None:
         mi = int(tty_input(t(C.CYN, "  Auth [1]: ")).strip() or "1") - 1
         method = methods[mi]
         try:
-            qr = ctx.get_qr_code()
-            if qr:
+            if ctx.get_qr_code():
                 print(t(C.GRAY, "  (Mở app MB quét QR/DOTP nếu cần)"))
         except Exception:
             pass
@@ -618,14 +742,18 @@ def feat_transfer(mb) -> None:
 def feat_info() -> None:
     clear()
     logo()
-    section("THÔNG TIN ỨNG DỤNG")
-    print(t(C.CYN, "  Ứng dụng : ") + t(C.W, "MB BANK Client"))
-    print(t(C.CYN, "  Tác giả  : ") + t(C.GRN, "Ontop"))
-    print(t(C.CYN, "  Phiên bản: ") + t(C.W, "2.0"))
+    box(
+        " THÔNG TIN ",
+        [
+            t(C.CYN, "  Ứng dụng : ") + t(C.W, "MB BANK Client"),
+            t(C.CYN, "  Tác giả  : ") + t(C.GRN, "Ontop"),
+            t(C.CYN, "  Phiên bản: ") + t(C.W, "2.1"),
+        ],
+        64,
+    )
     pause()
 
 
-# ─────────── MENU CHÍNH ───────────
 def main_menu() -> None:
     clear()
     logo()
@@ -658,15 +786,16 @@ def main_menu() -> None:
             ("00", "Thoát chương trình"),
         ]
         draw_menu(" BẢNG CHỨC NĂNG ", left, right)
+        if _default_stk:
+            print(t(C.GRAY, f"\n  STK mặc định: {_default_stk}"))
         print()
         choice = tty_input(t(C.CYN, "  Chọn chức năng (0): ")).strip()
-
         try:
             if choice in ("0", "00", ""):
                 print(t(C.MB, "\n  Tạm biệt.\n"))
                 break
             elif choice in ("1", "01"):
-                feat_balance(mb)
+                feat_balance_pick(mb)
             elif choice in ("2", "02"):
                 feat_history_days(mb, 14)
             elif choice in ("3", "03"):
