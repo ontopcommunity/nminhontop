@@ -19,6 +19,10 @@ const {
   formatVideoCaption,
 } = require("./tiktok");
 const {
+  searchTikTok,
+  formatSearchMessage,
+} = require("./search");
+const {
   doConfig,
   doFetchTasks,
   doClaim,
@@ -138,6 +142,58 @@ module.exports = async function handler(req, res) {
         }
       } catch (e) {
         await sendMessage(chatId, `✖ Lỗi: ${e.message}`);
+      } finally {
+        await clearWaiting(chatId, waitId);
+      }
+      return res.status(200).json({ ok: true });
+    }
+
+    // /search {từ khóa} | {số lượng}   — số lượng tùy chọn, mặc định 5
+    if (lower.startsWith("/search") || lower.startsWith("search ")) {
+      // Hỗ trợ: /search từ khóa | 10   hoặc  /search từ khóa 10
+      let raw = text.replace(/^\/?search\s*/i, "").trim();
+      let keyword = raw;
+      let count = 5;
+      if (raw.includes("|")) {
+        const parts = raw.split("|").map((s) => s.trim());
+        keyword = parts[0] || "";
+        const n = parseInt(parts[1], 10);
+        if (!isNaN(n) && n > 0) count = Math.min(n, 20);
+      } else {
+        // thử lấy số ở cuối
+        const m = raw.match(/^(.*?)\s+(\d{1,2})$/);
+        if (m) {
+          keyword = m[1].trim();
+          count = Math.min(parseInt(m[2], 10) || 5, 20);
+        }
+      }
+      if (!keyword) {
+        await sendMessage(
+          chatId,
+          "✦ Cú pháp: /search {từ khóa} | {số lượng}\n" +
+            "Ví dụ:\n/search mèo cute\n/search mèo cute | 10\n/search dance 8\n" +
+            "(số lượng mặc định 5, tối đa 20)"
+        );
+        return res.status(200).json({ ok: true });
+      }
+      let waitId = null;
+      try {
+        waitId = await sendWaiting(chatId, `⏳ Đang tìm "${keyword}" (${count} video)...`);
+        const result = await searchTikTok(keyword, count);
+        const msg = formatSearchMessage(result);
+        // chia nhỏ nếu quá dài
+        const chunks = [];
+        let s = msg;
+        while (s.length > 3500) {
+          chunks.push(s.slice(0, 3500));
+          s = s.slice(3500);
+        }
+        chunks.push(s);
+        for (const c of chunks) {
+          await sendMessage(chatId, c);
+        }
+      } catch (e) {
+        await sendMessage(chatId, `✖ Search lỗi: ${e.message}`);
       } finally {
         await clearWaiting(chatId, waitId);
       }
@@ -440,7 +496,8 @@ module.exports = async function handler(req, res) {
         chatId,
         "━━━━━━━━━━━━━━━━\n⚡ BOT ONTOP\n━━━━━━━━━━━━━━━━\n\n" +
           "▸ /tiktok {user}\n" +
-          "▸ /video {link}\n\n" +
+          "▸ /video {link}\n" +
+          "▸ /search {từ khóa} | {số}\n\n" +
           "── Nhiệm vụ ──\n" +
           "▸ /login\n" +
           "▸ /config {loai} {id}\n" +
@@ -467,7 +524,10 @@ module.exports = async function handler(req, res) {
         "━━━━━━━━━━━━━━━━\n📖 LỆNH CHI TIẾT\n━━━━━━━━━━━━━━━━\n\n" +
           "TIKTOK\n" +
           "/tiktok username\n" +
-          "/video https://vm.tiktok.com/...\n\n" +
+          "/video https://vm.tiktok.com/...\n" +
+          "/search {từ khóa} | {số lượng}\n" +
+          "  vd: /search mèo cute | 10\n" +
+          "  (mặc định 5 video, max 20)\n\n" +
           "NHIỆM VỤ (session)\n" +
           "/login — test PHPSESSID\n" +
           "/config loai id\n" +
