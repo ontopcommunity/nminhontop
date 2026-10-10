@@ -213,21 +213,12 @@ def login():
     try:
         _mb = mbbank.MBBank(username=user, password=pwd)
         print(t(C.GRN, f"  Đăng nhập thành công ({int((time.time() - t0) * 1000)} ms)"))
-        # STK mặc định = TK đăng nhập (STK đầu tiên)
         try:
             accts = get_accounts(_mb)
             if accts:
-                _default_stk = str(g(accts[0], "acctNo", "accountNo", default="") or "")
-                # ưu tiên STK trùng username nếu có
-                for a in accts:
-                    no = str(g(a, "acctNo", "accountNo", default="") or "")
-                    if no and (no == user or no.endswith(user[-9:] if len(user) >= 9 else user)):
-                        _default_stk = no
-                        break
+                _default_stk = str(g(accts[0], "acctNo", "accountNo", default="") or "") or None
         except Exception:
-            _default_stk = user
-        if _default_stk:
-            print(t(C.GRAY, f"  STK mặc định: {_default_stk}"))
+            _default_stk = None
         return _mb
     except Exception as e:
         print(t(C.RED, f"  Đăng nhập thất bại: {e}"))
@@ -369,6 +360,106 @@ def fetch_and_show_history(mb, account_no: Optional[str], days: int = 30) -> Non
 
 
 # ─────────── TÍNH NĂNG ───────────
+
+def fetch_and_show_history_all(mb, days: int = 30) -> None:
+    """Gộp GD từ mọi STK, sort theo thời gian mới → cũ, hiển thị 1 lịch sử."""
+    to_d = datetime.now()
+    fr_d = to_d - timedelta(days=min(max(days, 1), 90))
+    from_s = fr_d.strftime("%d/%m/%Y")
+    to_s = to_d.strftime("%d/%m/%Y")
+
+    try:
+        accts = get_accounts(mb)
+    except Exception as e:
+        print(t(C.RED, f"  Lỗi lấy danh sách STK: {e}"))
+        return
+
+    if not accts:
+        print(t(C.YEL, "  Không có tài khoản"))
+        return
+
+    stk_list = []
+    total_bal = 0
+    for a in accts:
+        no = str(g(a, "acctNo", "accountNo", default="") or "")
+        if no:
+            stk_list.append(no)
+        try:
+            total_bal += int(float(str(g(a, "currentBalance", "balance", "availableBalance", default=0) or 0).replace(",", "")))
+        except Exception:
+            pass
+
+    print(t(C.YEL, f"  Đang lấy lịch sử {len(stk_list)} STK · {from_s} → {to_s}..."))
+    t0 = time.time()
+    merged = []
+    for stk in stk_list:
+        try:
+            try:
+                hist = mb.getTransactionAccountHistory(
+                    from_date=fr_d, to_date=to_d, accountNo=stk
+                )
+            except TypeError:
+                hist = mb.getTransactionAccountHistory(from_date=fr_d, to_date=to_d)
+            raw = list(g(hist, "transactionHistoryList", default=[]) or [])
+        except Exception as e:
+            print(t(C.GRAY, f"  Bỏ qua STK {stk}: {e}"))
+            continue
+        for tx in raw:
+            credit = str(g(tx, "creditAmount", default="0") or "0").replace(",", "")
+            debit = str(g(tx, "debitAmount", default="0") or "0").replace(",", "")
+            try:
+                c_amt = float(credit or 0)
+                d_amt = float(debit or 0)
+            except Exception:
+                c_amt, d_amt = 0.0, 0.0
+            is_in = c_amt > 0
+            amt = c_amt if is_in else d_amt
+            bal = g(tx, "availableBalance", "balance", default=None)
+            date_s = str(g(tx, "transactionDate", "postingDate", default=""))[:19]
+            desc = str(g(tx, "description", default=""))
+            # gắn STK vào mô tả nếu nhiều TK
+            if len(stk_list) > 1:
+                desc = f"[{stk[-4:]}] {desc}" if desc else f"[{stk[-4:]}]"
+            merged.append(
+                {
+                    "type": "IN" if is_in else "OUT",
+                    "amount": amt,
+                    "date": date_s,
+                    "desc": desc,
+                    "bal": bal,
+                    "stk": stk,
+                    "_sort": date_s,
+                }
+            )
+        # nếu lib không nhận accountNo, chỉ lấy 1 lần
+        try:
+            mb.getTransactionAccountHistory(from_date=fr_d, to_date=to_d, accountNo=stk)
+        except TypeError:
+            break
+
+    # sort mới → cũ
+    def sort_key(x):
+        d = x.get("_sort") or ""
+        # dd/mm/yyyy hh:mm:ss hoặc yyyy-mm-dd
+        return d
+
+    merged.sort(key=sort_key, reverse=True)
+    # unique thô theo date+amount+desc
+    seen = set()
+    unique = []
+    for tx in merged:
+        k = (tx.get("date"), tx.get("amount"), tx.get("desc"), tx.get("type"))
+        if k in seen:
+            continue
+        seen.add(k)
+        unique.append(tx)
+
+    ms = int((time.time() - t0) * 1000)
+    print(t(C.GRN, f"  Thành công — {ms} ms · {len(stk_list)} STK
+"))
+    show_history_ui(unique, total_bal, from_s, to_s, ms)
+
+
 def feat_balance_pick(mb) -> None:
     """01 — chọn STK bất kỳ rồi xem lịch sử"""
     while True:
@@ -423,11 +514,10 @@ def feat_balance_pick(mb) -> None:
 
 
 def feat_history_days(mb, days: int) -> None:
-    """02/03/04 — luôn dùng STK mặc định khi đăng nhập"""
+    """02/03/04 — gộp lịch sử TẤT CẢ STK thành một danh sách"""
     clear()
     logo()
-    stk = default_stk(mb)
-    fetch_and_show_history(mb, stk, days=days)
+    fetch_and_show_history_all(mb, days=days)
     pause()
 
 
@@ -786,8 +876,6 @@ def main_menu() -> None:
             ("00", "Thoát chương trình"),
         ]
         draw_menu(" BẢNG CHỨC NĂNG ", left, right)
-        if _default_stk:
-            print(t(C.GRAY, f"\n  STK mặc định: {_default_stk}"))
         print()
         choice = tty_input(t(C.CYN, "  Chọn chức năng (0): ")).strip()
         try:
