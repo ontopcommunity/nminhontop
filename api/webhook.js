@@ -106,10 +106,10 @@ async function deliverReplies(chatId, data) {
       }
     }
   }
-  // auto check payment after QR
+  // auto check payment after QR + hết hạn 5 phút
   if (data.autoCheckMs && data.autoCheckChatId) {
     const cid = data.autoCheckChatId;
-    setTimeout(async () => {
+    const runCheck = async () => {
       try {
         const d2 = await callRentBot(cid, "/__checkpay_internal", false, {
           action: "checkpay",
@@ -122,25 +122,22 @@ async function deliverReplies(chatId, data) {
             }
           }
         }
-        // second pass
-        if (!d2.paid) {
-          setTimeout(async () => {
-            try {
-              const d3 = await callRentBot(cid, "/__checkpay_internal", false, {
-                action: "checkpay",
-              });
-              await deliverReplies(cid, d3);
-              if (d3.sideEffects) {
-                for (const se of d3.sideEffects) {
-                  if (se.type === "admin_notify" && se.text && ADMIN_CHAT_ID) {
-                    await sendMessage(ADMIN_CHAT_ID, se.text).catch(() => {});
-                  }
-                }
-              }
-            } catch (_) {}
-          }, 25000);
-        }
-      } catch (_) {}
+        return d2;
+      } catch (_) {
+        return null;
+      }
+    };
+    // ~18s, ~45s, ~5 phút (huỷ nếu chưa thanh toán)
+    setTimeout(async () => {
+      const d2 = await runCheck();
+      if (d2 && (d2.paid || d2.expired)) return;
+      setTimeout(async () => {
+        const d3 = await runCheck();
+        if (d3 && (d3.paid || d3.expired)) return;
+        setTimeout(async () => {
+          await runCheck(); // lần cuối ~5 phút → expired
+        }, 4 * 60 * 1000);
+      }, 25000);
     }, Number(data.autoCheckMs) || 18000);
   }
 }
