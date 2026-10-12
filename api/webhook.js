@@ -232,6 +232,9 @@ module.exports = async function handler(req, res) {
       lower.startsWith("/giftapibank") ||
       lower.startsWith("/setprice") ||
       lower.startsWith("/setpay") ||
+      lower.startsWith("/makecode") ||
+      lower.startsWith("/codes") ||
+      lower.startsWith("/setdiscount") ||
       lower.startsWith("/customers") ||
       lower.startsWith("/khach") ||
       lower.startsWith("/broadcast") ||
