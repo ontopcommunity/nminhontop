@@ -2,6 +2,42 @@ const SECRET_TOKEN = process.env.ZALO_SECRET_TOKEN;
 // Admin Zalo chat id (từ apimbbankvip / ZALO_CHAT_ID) — chỉ chat này được bot xử lý
 const ADMIN_CHAT_ID = String(process.env.ADMIN_CHAT_ID || process.env.REPORT_CHAT_ID || process.env.ZALO_CHAT_ID || "4e35fa606d3e8460dd2f").trim();
 const LOADING_GIF = process.env.LOADING_GIF_URL || "https://media.giphy.com/media/3oEjI6SIIHBdRxXI40/giphy.gif";
+const RENT_BOT_URL = (process.env.RENT_BOT_URL || "https://apimbbankvip.vercel.app/api/rent-bot").replace(/\/$/, "");
+const RENT_BOT_SECRET = process.env.RENT_BOT_SECRET || process.env.ZALO_SECRET_TOKEN || "";
+
+/** Lệnh public: user thường chỉ được dùng hệ thống bán API bank */
+function isRentPublicCommand(text) {
+  const t = String(text || "").trim().toLowerCase();
+  if (!t) return false;
+  const cmds = [
+    "/thueapibank", "thueapibank",
+    "/checkpay", "checkpay",
+    "/tkapi", "tkapi",
+    "/mystatus", "mystatus",
+    "/cancel", "cancel",
+    "/help", "help",
+    "/start",
+  ];
+  if (cmds.some((c) => t === c || t.startsWith(c + " "))) return true;
+  // chọn gói 1/2/3 ngay thang nam — để rent-bot xử lý (kể cả user)
+  if (/^(1|2|3|ngay|ngày|thang|tháng|nam|năm|day|month|year|mb|mbbank)$/i.test(t)) return true;
+  return false;
+}
+
+async function callRentBot(chatId, text, isAdmin) {
+  const r = await fetch(RENT_BOT_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      secret: RENT_BOT_SECRET,
+      chatId: String(chatId),
+      text: String(text || ""),
+      isAdmin: !!isAdmin,
+    }),
+  });
+  const data = await r.json().catch(() => ({}));
+  return data;
+}
 if (!SECRET_TOKEN) throw new Error("Missing ZALO_SECRET_TOKEN env");
 const {
   sendMessage,
@@ -86,13 +122,76 @@ module.exports = async function handler(req, res) {
     const lower = text.toLowerCase();
     const args = text.split(/\s+/).slice(1);
 
-    // Chỉ admin (chat id đã lưu) được dùng bot — lệnh khác giữ nguyên logic
-    if (ADMIN_CHAT_ID && String(chatId) !== String(ADMIN_CHAT_ID)) {
-      console.log("Skip non-admin chat:", chatId);
-      return res.status(200).json({ ok: true, note: "not_admin" });
+    const isAdmin = !ADMIN_CHAT_ID || String(chatId) === String(ADMIN_CHAT_ID);
+
+    // User thường: CHỈ hệ thống bán/thuê API bank (+ help)
+    // Admin: full bot + /giftapibank
+    if (!isAdmin) {
+      // Cho phép lệnh rent public + tin nhắn trong flow (số/gói/MB/mk)
+      const allow =
+        isRentPublicCommand(text) ||
+        // mật khẩu / username khi đang /tkapi — forward mọi tin không phải lệnh admin
+        (text && !text.trim().startsWith("/"));
+      if (!allow) {
+        await sendMessage(
+          chatId,
+          "🔒 Bot này chỉ mở phần thuê API Bank.\n\n" +
+            "/thueapibank — thuê API\n" +
+            "/tkapi — gắn TK ngân hàng\n" +
+            "/mystatus — trạng thái\n" +
+            "/help — hướng dẫn"
+        ).catch(() => {});
+        return res.status(200).json({ ok: true, note: "user_rent_only" });
+      }
+      await sendChatAction(chatId, "typing").catch(() => {});
+      try {
+        const data = await callRentBot(chatId, text, false);
+        for (const m of data.replies || []) {
+          if (m) await sendMessage(chatId, m);
+        }
+        if (data.notifyTarget?.chatId && data.notifyTarget?.text) {
+          await sendMessage(data.notifyTarget.chatId, data.notifyTarget.text).catch(() => {});
+        }
+        if (!(data.replies || []).length && data.handled === false) {
+          await sendMessage(
+            chatId,
+            "Gõ /thueapibank để thuê API hoặc /help"
+          );
+        }
+      } catch (e) {
+        await sendMessage(chatId, "✖ Lỗi rent-bot: " + (e.message || e));
+      }
+      return res.status(200).json({ ok: true, note: "user_rent" });
     }
 
     await sendChatAction(chatId, "typing").catch(() => {});
+
+    // ===== Admin: lệnh thuê API + gift =====
+    if (
+      lower.startsWith("/thueapibank") ||
+      lower.startsWith("/checkpay") ||
+      lower.startsWith("/tkapi") ||
+      lower.startsWith("/mystatus") ||
+      lower.startsWith("/giftapibank") ||
+      lower === "thueapibank" ||
+      lower === "checkpay" ||
+      lower === "tkapi" ||
+      lower === "mystatus" ||
+      lower.startsWith("giftapibank")
+    ) {
+      try {
+        const data = await callRentBot(chatId, text, true);
+        for (const m of data.replies || []) {
+          if (m) await sendMessage(chatId, m);
+        }
+        if (data.notifyTarget?.chatId && data.notifyTarget?.text) {
+          await sendMessage(data.notifyTarget.chatId, data.notifyTarget.text).catch(() => {});
+        }
+      } catch (e) {
+        await sendMessage(chatId, "✖ Lỗi rent-bot: " + (e.message || e));
+      }
+      return res.status(200).json({ ok: true, note: "admin_rent" });
+    }
 
     // ========== TIKTOK ==========
     if (lower.startsWith("/tiktok") || lower.startsWith("tiktok ")) {
@@ -544,6 +643,10 @@ module.exports = async function handler(req, res) {
           "Nhắn thường (không bắt đầu bằng /) — AI\n" +
           "Ảnh/file ≤5MB gửi kèm tin thường\n" +
           "/{lệnh} — chỉ lệnh, không gọi AI\n\n" +
+          "API BANK (user + admin)\n" +
+          "/thueapibank — thuê (ngày 1k · tháng 25k · năm 200k)\n" +
+          "/checkpay /tkapi /mystatus\n" +
+          "/giftapibank {goi} {id} — admin tặng\n\n" +
           "Env Vercel: GEMINI_API_KEY, API_BASE,\n" +
           "ACCESS_TOKEN, API_KEY, ZALO_SECRET_TOKEN\n" +
           "━━━━━━━━━━━━━━━━"
