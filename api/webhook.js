@@ -1,78 +1,25 @@
 const SECRET_TOKEN = process.env.ZALO_SECRET_TOKEN;
-// Admin Zalo chat id (từ apimbbankvip / ZALO_CHAT_ID) — chỉ chat này được bot xử lý
-const ADMIN_CHAT_ID = String(process.env.ADMIN_CHAT_ID || process.env.REPORT_CHAT_ID || process.env.ZALO_CHAT_ID || "4e35fa606d3e8460dd2f").trim();
-const LOADING_GIF = process.env.LOADING_GIF_URL || "https://media.giphy.com/media/3oEjI6SIIHBdRxXI40/giphy.gif";
-const RENT_BOT_URL = (process.env.RENT_BOT_URL || "https://apimbbankvip.vercel.app/api/rent-bot").replace(/\/$/, "");
+const ADMIN_CHAT_ID = String(
+  process.env.ADMIN_CHAT_ID ||
+    process.env.REPORT_CHAT_ID ||
+    process.env.ZALO_CHAT_ID ||
+    "4e35fa606d3e8460dd2f"
+).trim();
+const RENT_BOT_URL = (
+  process.env.RENT_BOT_URL || "https://apimbbankvip.vercel.app/api/rent-bot"
+).replace(/\/$/, "");
 const RENT_BOT_SECRET = process.env.RENT_BOT_SECRET || process.env.ZALO_SECRET_TOKEN || "";
 
-/** Lệnh public: user thường chỉ được dùng hệ thống bán API bank */
-function isRentPublicCommand(text) {
-  const t = String(text || "").trim().toLowerCase();
-  if (!t) return false;
-  const cmds = [
-    "/thueapibank", "thueapibank",
-    "/checkpay", "checkpay",
-    "/tkapi", "tkapi",
-    "/mystatus", "mystatus",
-    "/cancel", "cancel",
-    "/help", "help",
-    "/start",
-  ];
-  if (cmds.some((c) => t === c || t.startsWith(c + " "))) return true;
-  // chọn gói 1/2/3 ngay thang nam — để rent-bot xử lý (kể cả user)
-  if (/^(1|2|3|ngay|ngày|thang|tháng|nam|năm|day|month|year|mb|mbbank)$/i.test(t)) return true;
-  return false;
-}
-
-async function callRentBot(chatId, text, isAdmin) {
-  const r = await fetch(RENT_BOT_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      secret: RENT_BOT_SECRET,
-      chatId: String(chatId),
-      text: String(text || ""),
-      isAdmin: !!isAdmin,
-    }),
-  });
-  const data = await r.json().catch(() => ({}));
-  return data;
-}
 if (!SECRET_TOKEN) throw new Error("Missing ZALO_SECRET_TOKEN env");
+
 const {
   sendMessage,
   sendPhoto,
   sendChatAction,
   deleteMessage,
   extractMessageId,
-  setChatKeyboard,
-  deleteChatKeyboard,
 } = require("./bot");
-const {
-  getUser,
-  getVideo,
-  formatUserCaption,
-  formatVideoCaption,
-} = require("./tiktok");
-const {
-  searchTikTok,
-  formatSearchMessage,
-} = require("./search");
-const {
-  doConfig,
-  doFetchTasks,
-  doClaim,
-  doServices,
-  doAddOrder,
-  doStatus,
-  doBalance,
-  doCancel,
-  doBoost,
-  loginSession,
-} = require("./smm");
-const { chatGrok } = require("./grok");
-
-const DEMO_PHOTO = "https://placehold.co/600x400/png?text=Zalo+Bot+Ontop";
+const { getUser, getVideo, formatUserCaption, formatVideoCaption } = require("./tiktok");
 
 async function sendWaiting(chatId, text) {
   const r = await sendMessage(chatId, text);
@@ -83,17 +30,118 @@ async function clearWaiting(chatId, msgId) {
   if (!msgId) return;
   try {
     await deleteMessage(chatId, msgId);
-  } catch (e) {
-    console.warn("deleteMessage fail:", e.message);
-  }
+  } catch (_) {}
 }
 
-function fmtJson(obj, max = 1800) {
-  try {
-    const s = JSON.stringify(obj, null, 2);
-    return s.length > max ? s.slice(0, max) + "\n… (cắt)" : s;
-  } catch {
-    return String(obj);
+function isRentRelated(text) {
+  const t = String(text || "").trim().toLowerCase();
+  if (!t) return false;
+  const cmds = [
+    "/thueapibank",
+    "thueapibank",
+    "/tkapi",
+    "tkapi",
+    "/mystatus",
+    "mystatus",
+    "/cancel",
+    "cancel",
+    "/help",
+    "help",
+    "/start",
+  ];
+  if (cmds.some((c) => t === c || t.startsWith(c + " "))) return true;
+  // flow: số + đơn vị, MB, username, password
+  if (
+    /^(\d+\s*)?(ngay|ngày|thang|tháng|nam|năm|day|month|year|1|2|3|mb|mbbank)$/i.test(t)
+  )
+    return true;
+  if (/^\d+\s*(ngay|ngày|thang|tháng|nam|năm)/i.test(t)) return true;
+  // any non-slash text may be rent flow (qty / pass)
+  if (!t.startsWith("/")) return true;
+  return false;
+}
+
+async function callRentBot(chatId, text, isAdmin, extra = {}) {
+  const r = await fetch(RENT_BOT_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      secret: RENT_BOT_SECRET,
+      chatId: String(chatId),
+      text: String(text || ""),
+      isAdmin: !!isAdmin,
+      ...extra,
+    }),
+  });
+  return r.json().catch(() => ({}));
+}
+
+async function deliverReplies(chatId, data) {
+  for (const m of data.replies || []) {
+    if (!m) continue;
+    if (typeof m === "string") {
+      await sendMessage(chatId, m);
+      continue;
+    }
+    if (m.photo) {
+      const pr = await sendPhoto(chatId, m.photo, (m.text || "").slice(0, 1900));
+      if (pr && pr.ok === false && m.text) await sendMessage(chatId, m.text);
+      else if (!m.photo && m.text) await sendMessage(chatId, m.text);
+    } else if (m.text) {
+      await sendMessage(chatId, m.text);
+    }
+  }
+  if (data.notifyTarget?.chatId && data.notifyTarget?.text) {
+    await sendMessage(data.notifyTarget.chatId, data.notifyTarget.text).catch(() => {});
+  }
+  if (data.broadcast?.chatIds?.length && data.broadcast?.text) {
+    for (const id of data.broadcast.chatIds) {
+      await sendMessage(id, "📣 " + data.broadcast.text).catch(() => {});
+    }
+  }
+  if (data.sideEffects) {
+    for (const se of data.sideEffects) {
+      if (se.type === "admin_notify" && se.text && ADMIN_CHAT_ID) {
+        await sendMessage(ADMIN_CHAT_ID, se.text).catch(() => {});
+      }
+    }
+  }
+  // auto check payment after QR
+  if (data.autoCheckMs && data.autoCheckChatId) {
+    const cid = data.autoCheckChatId;
+    setTimeout(async () => {
+      try {
+        const d2 = await callRentBot(cid, "/__checkpay_internal", false, {
+          action: "checkpay",
+        });
+        await deliverReplies(cid, d2);
+        if (d2.sideEffects) {
+          for (const se of d2.sideEffects) {
+            if (se.type === "admin_notify" && se.text && ADMIN_CHAT_ID) {
+              await sendMessage(ADMIN_CHAT_ID, se.text).catch(() => {});
+            }
+          }
+        }
+        // second pass
+        if (!d2.paid) {
+          setTimeout(async () => {
+            try {
+              const d3 = await callRentBot(cid, "/__checkpay_internal", false, {
+                action: "checkpay",
+              });
+              await deliverReplies(cid, d3);
+              if (d3.sideEffects) {
+                for (const se of d3.sideEffects) {
+                  if (se.type === "admin_notify" && se.text && ADMIN_CHAT_ID) {
+                    await sendMessage(ADMIN_CHAT_ID, se.text).catch(() => {});
+                  }
+                }
+              }
+            } catch (_) {}
+          }, 25000);
+        }
+      } catch (_) {}
+    }, Number(data.autoCheckMs) || 18000);
   }
 }
 
@@ -109,8 +157,6 @@ module.exports = async function handler(req, res) {
 
   try {
     const body = req.body;
-    console.log("Event:", JSON.stringify(body).slice(0, 600));
-
     const event = body.result || body;
     const message = event.message || body.message;
     if (!message?.chat?.id) {
@@ -121,91 +167,86 @@ module.exports = async function handler(req, res) {
     const text = (message.text || "").trim();
     const lower = text.toLowerCase();
     const args = text.split(/\s+/).slice(1);
-
     const isAdmin = !ADMIN_CHAT_ID || String(chatId) === String(ADMIN_CHAT_ID);
 
-    // User thường: CHỈ hệ thống bán/thuê API bank (+ help)
-    // Admin: full bot + /giftapibank
+    // ===== USER: chỉ thuê API =====
     if (!isAdmin) {
-      // Cho phép lệnh rent public + tin nhắn trong flow (số/gói/MB/mk)
-      const allow =
-        isRentPublicCommand(text) ||
-        // mật khẩu / username khi đang /tkapi — forward mọi tin không phải lệnh admin
-        (text && !text.trim().startsWith("/"));
-      if (!allow) {
+      if (!isRentRelated(text)) {
         await sendMessage(
           chatId,
-          "🔒 Bot này chỉ mở phần thuê API Bank.\n\n" +
+          "🔒 Chỉ hỗ trợ thuê API Bank.\n\n" +
             "/thueapibank — thuê API\n" +
             "/tkapi — gắn TK ngân hàng\n" +
             "/mystatus — trạng thái\n" +
-            "/help — hướng dẫn"
+            "/help"
         ).catch(() => {});
-        return res.status(200).json({ ok: true, note: "user_rent_only" });
+        return res.status(200).json({ ok: true, note: "user_blocked" });
       }
       await sendChatAction(chatId, "typing").catch(() => {});
       try {
         const data = await callRentBot(chatId, text, false);
-        for (const m of data.replies || []) {
-          if (m) await sendMessage(chatId, m);
-        }
-        if (data.notifyTarget?.chatId && data.notifyTarget?.text) {
-          await sendMessage(data.notifyTarget.chatId, data.notifyTarget.text).catch(() => {});
-        }
+        await deliverReplies(chatId, data);
         if (!(data.replies || []).length && data.handled === false) {
-          await sendMessage(
-            chatId,
-            "Gõ /thueapibank để thuê API hoặc /help"
-          );
+          await sendMessage(chatId, "Gõ /thueapibank hoặc /help");
         }
       } catch (e) {
-        await sendMessage(chatId, "✖ Lỗi rent-bot: " + (e.message || e));
+        await sendMessage(chatId, "✖ Lỗi: " + (e.message || e));
       }
       return res.status(200).json({ ok: true, note: "user_rent" });
     }
 
+    // ===== ADMIN =====
     await sendChatAction(chatId, "typing").catch(() => {});
 
-    // ===== Admin: lệnh thuê API + gift =====
-    if (
+    // Admin rent / gift / manage
+    const adminRent =
       lower.startsWith("/thueapibank") ||
-      lower.startsWith("/checkpay") ||
       lower.startsWith("/tkapi") ||
       lower.startsWith("/mystatus") ||
       lower.startsWith("/giftapibank") ||
-      lower === "thueapibank" ||
-      lower === "checkpay" ||
-      lower === "tkapi" ||
-      lower === "mystatus" ||
-      lower.startsWith("giftapibank")
-    ) {
+      lower.startsWith("/setprice") ||
+      lower.startsWith("/setpay") ||
+      lower.startsWith("/customers") ||
+      lower.startsWith("/khach") ||
+      lower.startsWith("/broadcast") ||
+      lower.startsWith("/thongbao") ||
+      lower === "/prices" ||
+      lower === "prices" ||
+      lower === "/cancel" ||
+      lower === "cancel" ||
+      lower === "/help" ||
+      lower === "help" ||
+      lower.startsWith("/start") ||
+      // flow text when admin testing rent
+      (!text.startsWith("/") && text.length > 0 && isRentRelated(text));
+
+    if (adminRent && !lower.startsWith("/tiktok") && !lower.startsWith("/video") && !lower.startsWith("/giaodich") && lower !== "/gd") {
+      // if clearly tiktok path skip - handled below
       try {
         const data = await callRentBot(chatId, text, true);
-        for (const m of data.replies || []) {
-          if (m) await sendMessage(chatId, m);
-        }
-        if (data.notifyTarget?.chatId && data.notifyTarget?.text) {
-          await sendMessage(data.notifyTarget.chatId, data.notifyTarget.text).catch(() => {});
+        if ((data.replies || []).length || data.broadcast || data.notifyTarget || data.handled !== false) {
+          await deliverReplies(chatId, data);
+          return res.status(200).json({ ok: true, note: "admin_rent" });
         }
       } catch (e) {
-        await sendMessage(chatId, "✖ Lỗi rent-bot: " + (e.message || e));
+        await sendMessage(chatId, "✖ rent: " + (e.message || e));
+        return res.status(200).json({ ok: true });
       }
-      return res.status(200).json({ ok: true, note: "admin_rent" });
     }
 
     // ========== TIKTOK ==========
     if (lower.startsWith("/tiktok") || lower.startsWith("tiktok ")) {
       const username = args[0]?.replace(/^@/, "");
       if (!username) {
-        await sendMessage(chatId, "✦ Cú pháp: /tiktok {username}\nVí dụ: /tiktok ontopcommunity");
+        await sendMessage(chatId, "✦ Cú pháp: /tiktok {username}");
         return res.status(200).json({ ok: true });
       }
       let waitId = null;
       try {
         waitId = await sendWaiting(chatId, `⏳ Đang soi @${username}...`);
-        const data = await getUser(username);
-        const caption = formatUserCaption(data);
-        const avatar = data.author?.avatar;
+        const user = await getUser(username);
+        const caption = formatUserCaption(user);
+        const avatar = user?.avatar || user?.avatarLarger || user?.avatarMedium;
         if (avatar) {
           const photoRes = await sendPhoto(chatId, avatar, caption);
           if (photoRes && photoRes.ok === false) await sendMessage(chatId, caption);
@@ -220,19 +261,19 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ ok: true });
     }
 
+    // ========== VIDEO ==========
     if (lower.startsWith("/video") || lower.startsWith("video ")) {
-      const linkMatch = text.match(/https?:\/\/[^\s]+/);
-      const link = linkMatch ? linkMatch[0] : null;
+      const link = args[0];
       if (!link) {
-        await sendMessage(chatId, "✦ Cú pháp: /video {link TikTok}\nVí dụ: /video https://vm.tiktok.com/...");
+        await sendMessage(chatId, "✦ Cú pháp: /video {link TikTok}");
         return res.status(200).json({ ok: true });
       }
       let waitId = null;
       try {
         waitId = await sendWaiting(chatId, "⏳ Đang lấy video...");
-        const data = await getVideo(link);
-        const caption = formatVideoCaption(data);
-        const cover = data.urls?.cover || data.urls?.coverHD;
+        const video = await getVideo(link);
+        const caption = formatVideoCaption(video);
+        const cover = video?.cover || video?.originCover;
         if (cover) {
           const photoRes = await sendPhoto(chatId, cover, caption.slice(0, 1900));
           if (photoRes && photoRes.ok === false) await sendMessage(chatId, caption);
@@ -247,303 +288,21 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ ok: true });
     }
 
-    // /search {từ khóa} | {số lượng}   — số lượng tùy chọn, mặc định 5
-    if (lower.startsWith("/search") || lower.startsWith("search ")) {
-      // Hỗ trợ: /search từ khóa | 10   hoặc  /search từ khóa 10
-      let raw = text.replace(/^\/?search\s*/i, "").trim();
-      let keyword = raw;
-      let count = 5;
-      if (raw.includes("|")) {
-        const parts = raw.split("|").map((s) => s.trim());
-        keyword = parts[0] || "";
-        const n = parseInt(parts[1], 10);
-        if (!isNaN(n) && n > 0) count = Math.min(n, 20);
-      } else {
-        // thử lấy số ở cuối
-        const m = raw.match(/^(.*?)\s+(\d{1,2})$/);
-        if (m) {
-          keyword = m[1].trim();
-          count = Math.min(parseInt(m[2], 10) || 5, 20);
-        }
-      }
-      if (!keyword) {
-        await sendMessage(
-          chatId,
-          "✦ Cú pháp: /search {từ khóa} | {số lượng}\n" +
-            "Ví dụ:\n/search mèo cute\n/search mèo cute | 10\n/search dance 8\n" +
-            "(số lượng mặc định 5, tối đa 20)"
-        );
-        return res.status(200).json({ ok: true });
-      }
-      let waitId = null;
-      try {
-        waitId = await sendWaiting(chatId, `⏳ Đang tìm "${keyword}" (${count} video)...`);
-        const result = await searchTikTok(keyword, count);
-        const msg = formatSearchMessage(result);
-        // chia nhỏ nếu quá dài
-        const chunks = [];
-        let s = msg;
-        while (s.length > 3500) {
-          chunks.push(s.slice(0, 3500));
-          s = s.slice(3500);
-        }
-        chunks.push(s);
-        for (const c of chunks) {
-          await sendMessage(chatId, c);
-        }
-      } catch (e) {
-        await sendMessage(chatId, `✖ Search lỗi: ${e.message}`);
-      } finally {
-        await clearWaiting(chatId, waitId);
-      }
+    // ========== /id ==========
+    if (lower === "/id" || lower === "id") {
+      await sendMessage(
+        chatId,
+        [
+          "Thông tin chat",
+          `Chat ID: ${chatId}`,
+          `User: ${message.from?.name || message.from?.display_name || "—"}`,
+          `From ID: ${message.from?.id || "—"}`,
+        ].join("\n")
+      );
       return res.status(200).json({ ok: true });
     }
 
-    // ========== TASK MODULE ==========
-    // /login — kiểm tra session
-    if (lower === "/login" || lower === "login" || lower.startsWith("/login ")) {
-      const force = args[0] === "force" || args[0] === "new";
-      let waitId = null;
-      try {
-        waitId = await sendWaiting(chatId, force ? "⏳ Force login mới..." : "⏳ Lấy session...");
-        const cookie = await loginSession(force);
-        const source = force ? "login mới" : (process.env.PHPSESSID ? "env PHPSESSID" : "login mới");
-        await sendMessage(chatId, `✅ Session OK (${source})\n${cookie}`);
-      } catch (e) {
-        await sendMessage(chatId, `✖ Login fail: ${e.message}`);
-      } finally {
-        await clearWaiting(chatId, waitId);
-      }
-      return res.status(200).json({ ok: true });
-    }
-
-    // /config <loai> <id>
-    if (lower.startsWith("/config") || lower.startsWith("config ")) {
-      const loai = args[0];
-      const id = args[1];
-      if (!loai || !id) {
-        await sendMessage(chatId, "✦ Cú pháp: /config {loai} {id}\nVí dụ: /config 1 123");
-        return res.status(200).json({ ok: true });
-      }
-      let waitId = null;
-      try {
-        waitId = await sendWaiting(chatId, "⏳ Config môi trường...");
-        const data = await doConfig(loai, id);
-        await sendMessage(chatId, `✅ Config\n\`\`\`\n${fmtJson(data)}\n\`\`\``);
-      } catch (e) {
-        await sendMessage(chatId, `✖ Config lỗi: ${e.message}`);
-      } finally {
-        await clearWaiting(chatId, waitId);
-      }
-      return res.status(200).json({ ok: true });
-    }
-
-    // /tasks <type> [nickchay]
-    if (lower.startsWith("/tasks") || lower.startsWith("tasks ")) {
-      const type = args[0];
-      const nickchay = args[1] || "";
-      const envCode = args[2] || type;
-      if (!type) {
-        await sendMessage(chatId, "✦ Cú pháp: /tasks {type} [nickchay] [envCode]\nVí dụ: /tasks like nick1 env_01");
-        return res.status(200).json({ ok: true });
-      }
-      let waitId = null;
-      try {
-        waitId = await sendWaiting(chatId, `⏳ Lấy nhiệm vụ type=${type} env=${envCode}...`);
-        const data = await doFetchTasks(type, nickchay, envCode);
-        await sendMessage(chatId, `📋 Tasks\n\`\`\`\n${fmtJson(data)}\n\`\`\``);
-      } catch (e) {
-        await sendMessage(chatId, `✖ Tasks lỗi: ${e.message}`);
-      } finally {
-        await clearWaiting(chatId, waitId);
-      }
-      return res.status(200).json({ ok: true });
-    }
-
-    // /claim <id|id1,id2> [nickchay]
-    if (lower.startsWith("/claim") || lower.startsWith("claim ")) {
-      const ids = args[0];
-      const type = args[1] || "";
-      const nickchay = args[2] || "";
-      const envCode = args[3] || type;
-      if (!ids) {
-        await sendMessage(chatId, "✦ Cú pháp: /claim {id} {type} [nickchay] [envCode]\nVí dụ: /claim 889900 like nick1 env_01");
-        return res.status(200).json({ ok: true });
-      }
-      let waitId = null;
-      try {
-        waitId = await sendWaiting(chatId, "⏳ Claim nhiệm vụ...");
-        const data = await doClaim(ids, type, nickchay, envCode);
-        await sendMessage(chatId, `✅ Claim\n\`\`\`\n${fmtJson(data)}\n\`\`\``);
-      } catch (e) {
-        await sendMessage(chatId, `✖ Claim lỗi: ${e.message}`);
-      } finally {
-        await clearWaiting(chatId, waitId);
-      }
-      return res.status(200).json({ ok: true });
-    }
-
-    // ========== PROCUREMENT MODULE ==========
-    // /services
-    if (lower === "/services" || lower === "services") {
-      let waitId = null;
-      try {
-        waitId = await sendWaiting(chatId, "⏳ Lấy danh mục dịch vụ...");
-        const data = await doServices();
-        // nếu là mảng thì format ngắn
-        let msg;
-        if (Array.isArray(data)) {
-          const lines = data.slice(0, 30).map(
-            (s) => `#${s.service} ${s.name || "?"} | rate ${s.rate} | ${s.min}-${s.max}`
-          );
-          msg = `📦 Services (${data.length})\n${lines.join("\n")}${data.length > 30 ? "\n… còn nữa" : ""}`;
-        } else {
-          msg = `📦 Services\n\`\`\`\n${fmtJson(data)}\n\`\`\``;
-        }
-        await sendMessage(chatId, msg);
-      } catch (e) {
-        await sendMessage(chatId, `✖ Services lỗi: ${e.message}`);
-      } finally {
-        await clearWaiting(chatId, waitId);
-      }
-      return res.status(200).json({ ok: true });
-    }
-
-    // /order <service> <link> <quantity> [comments...]
-    if (lower.startsWith("/order") || lower.startsWith("order ")) {
-      const service = args[0];
-      const link = args[1];
-      const quantity = args[2];
-      const comments = args.slice(3).join(" ") || "";
-      if (!service || !link || !quantity) {
-        await sendMessage(
-          chatId,
-          "✦ Cú pháp: /order {service} {link} {quantity} [comments]\nVí dụ: /order 123 https://tiktok.com/@x 1000"
-        );
-        return res.status(200).json({ ok: true });
-      }
-      let waitId = null;
-      try {
-        waitId = await sendWaiting(chatId, "⏳ Tạo đơn hàng...");
-        const data = await doAddOrder(service, link, quantity, comments);
-        await sendMessage(chatId, `🛒 Order\n\`\`\`\n${fmtJson(data)}\n\`\`\``);
-      } catch (e) {
-        await sendMessage(chatId, `✖ Order lỗi: ${e.message}`);
-      } finally {
-        await clearWaiting(chatId, waitId);
-      }
-      return res.status(200).json({ ok: true });
-    }
-
-    // /status <order|order1,order2>
-    if (lower.startsWith("/status") || lower.startsWith("status ")) {
-      const order = args[0];
-      if (!order) {
-        await sendMessage(chatId, "✦ Cú pháp: /status {order}\nVí dụ: /status 98765 hoặc /status 1,2,3");
-        return res.status(200).json({ ok: true });
-      }
-      let waitId = null;
-      try {
-        waitId = await sendWaiting(chatId, "⏳ Kiểm tra trạng thái...");
-        const data = await doStatus(order);
-        await sendMessage(chatId, `📊 Status\n\`\`\`\n${fmtJson(data)}\n\`\`\``);
-      } catch (e) {
-        await sendMessage(chatId, `✖ Status lỗi: ${e.message}`);
-      } finally {
-        await clearWaiting(chatId, waitId);
-      }
-      return res.status(200).json({ ok: true });
-    }
-
-    // /balance
-    if (lower === "/balance" || lower === "balance" || lower === "/sodu") {
-      let waitId = null;
-      try {
-        waitId = await sendWaiting(chatId, "⏳ Kiểm tra số dư...");
-        const data = await doBalance();
-        await sendMessage(chatId, `💰 Balance\n\`\`\`\n${fmtJson(data)}\n\`\`\``);
-      } catch (e) {
-        await sendMessage(chatId, `✖ Balance lỗi: ${e.message}`);
-      } finally {
-        await clearWaiting(chatId, waitId);
-      }
-      return res.status(200).json({ ok: true });
-    }
-
-    // /cancel <order>
-    if (lower.startsWith("/cancel") || lower.startsWith("cancel ")) {
-      const order = args[0];
-      if (!order) {
-        await sendMessage(chatId, "✦ Cú pháp: /cancel {order}");
-        return res.status(200).json({ ok: true });
-      }
-      let waitId = null;
-      try {
-        waitId = await sendWaiting(chatId, "⏳ Hủy đơn...");
-        const data = await doCancel(order);
-        await sendMessage(chatId, `🗑 Cancel\n\`\`\`\n${fmtJson(data)}\n\`\`\``);
-      } catch (e) {
-        await sendMessage(chatId, `✖ Cancel lỗi: ${e.message}`);
-      } finally {
-        await clearWaiting(chatId, waitId);
-      }
-      return res.status(200).json({ ok: true });
-    }
-
-    // /boost <order>
-    if (lower.startsWith("/boost") || lower.startsWith("boost ")) {
-      const order = args[0];
-      if (!order) {
-        await sendMessage(chatId, "✦ Cú pháp: /boost {order}");
-        return res.status(200).json({ ok: true });
-      }
-      let waitId = null;
-      try {
-        waitId = await sendWaiting(chatId, "⏳ Boost đơn...");
-        const data = await doBoost(order);
-        await sendMessage(chatId, `🚀 Boost\n\`\`\`\n${fmtJson(data)}\n\`\`\``);
-      } catch (e) {
-        await sendMessage(chatId, `✖ Boost lỗi: ${e.message}`);
-      } finally {
-        await clearWaiting(chatId, waitId);
-      }
-      return res.status(200).json({ ok: true });
-    }
-
-    // ========== MENU / HELP ==========
-    // ========== /id — thông tin người nhắn ==========
-    if (lower === "/id" || lower === "id" || lower.startsWith("/id ")) {
-      const chat = message.chat || {};
-      const from = message.from || message.sender || {};
-      const lines = [
-        "🪪 Thông tin người nhắn",
-        "",
-        `Chat ID: ${chatId}`,
-        from.id ? `User ID: ${from.id}` : null,
-        from.account_name || from.username
-          ? `Account: ${from.account_name || from.username}`
-          : null,
-        from.display_name || from.name || chat.display_name || chat.name
-          ? `Tên: ${from.display_name || from.name || chat.display_name || chat.name}`
-          : null,
-        chat.type ? `Loại chat: ${chat.type}` : null,
-        message.message_id ? `Message ID: ${message.message_id}` : null,
-        message.date ? `Time: ${message.date}` : null,
-      ].filter(Boolean);
-      // full raw nhỏ gọn để debug
-      try {
-        const raw = JSON.stringify(
-          { chat: message.chat, from: message.from || message.sender },
-          null,
-          2
-        );
-        lines.push("", "Raw:", raw.length > 1200 ? raw.slice(0, 1200) + "…" : raw);
-      } catch (_) {}
-      await sendMessage(chatId, lines.join("\n"));
-      return res.status(200).json({ ok: true });
-    }
-
-        // ========== MB BANK GIAO DỊCH ==========
+    // ========== /giaodich ==========
     if (
       lower === "/giaodich" ||
       lower === "giaodich" ||
@@ -552,37 +311,28 @@ module.exports = async function handler(req, res) {
     ) {
       let waitId = null;
       try {
-        waitId = await sendWaiting(chatId, "⏳ Đang lấy lịch sử MB (mới nhất)...");
-        const r = await fetch("https://apimbbankvip.vercel.app/api/aduanhminh?rows=10&days=30", {
-          headers: { Accept: "application/json" },
-        });
+        waitId = await sendWaiting(chatId, "⏳ Đang lấy lịch sử MB...");
+        const r = await fetch(
+          "https://apimbbankvip.vercel.app/api/aduanhminh?rows=10&days=30",
+          { headers: { Accept: "application/json" } }
+        );
         const data = await r.json();
         await clearWaiting(chatId, waitId);
         if (data.status !== "success") {
           await sendMessage(chatId, "❌ Lỗi MB: " + (data.msg || "unknown"));
-          return res.status(200).json({ ok: true });
+        } else {
+          const bal = data.balance != null ? Number(data.balance).toLocaleString("vi-VN") + "đ" : "—";
+          const txs = data.transactions || [];
+          if (!txs.length) {
+            await sendMessage(chatId, "📋 Không có giao dịch.\n💰 Số dư: " + bal);
+          } else {
+            const lines = txs.slice(0, 10).map((tx, i) => {
+              const t = tx.type === "IN" ? "VÀO" : "RA";
+              return `${i + 1}. [${t}] ${tx.line1 || tx.amount}\n${tx.line2 || tx.description || ""}\n${tx.line3 || ""}`;
+            });
+            await sendMessage(chatId, `💰 Số dư: ${bal}\n\n` + lines.join("\n\n"));
+          }
         }
-        const txs = data.transactions || [];
-        const bal = data.balance != null
-          ? Number(String(data.balance).replace(/,/g, "")).toLocaleString("vi-VN") + "đ"
-          : null;
-        if (!txs.length) {
-          await sendMessage(chatId, "📋 Không có giao dịch." + (bal ? `\n💰 Số dư: ${bal}` : ""));
-          return res.status(200).json({ ok: true });
-        }
-        const lines = txs.map((tx, i) => {
-          const icon = tx.type === "IN" ? "🟢" : "🔴";
-          return `${icon} ${i + 1}. ${tx.line1 || ""}\n   ${tx.line2 || ""}${tx.line3 ? "\n   " + tx.line3 : ""}`;
-        });
-        const head = [
-          "════════════════════",
-          "📋 10 GIAO DỊCH GẦN NHẤT",
-          bal ? `💰 Số dư hiện tại: ${bal}` : null,
-          data.range ? `📅 ${data.range.from} → ${data.range.to}` : null,
-          "════════════════════",
-          "",
-        ].filter(Boolean).join("\n");
-        await sendMessage(chatId, head + "\n" + lines.join("\n\n"));
       } catch (e) {
         await clearWaiting(chatId, waitId);
         await sendMessage(chatId, "❌ Lỗi: " + (e.message || String(e)));
@@ -590,139 +340,18 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ ok: true });
     }
 
-    if (lower === "/start" || lower === "start" || lower === "menu") {
+    if (text && text.trim().startsWith("/")) {
       await sendMessage(
         chatId,
-        "━━━━━━━━━━━━━━━━\n⚡ BOT ONTOP\n━━━━━━━━━━━━━━━━\n\n" +
-          "▸ /tiktok {user}\n" +
-          "▸ /video {link}\n" +
-          "▸ /search {từ khóa} | {số}\n\n" +
-          "── Nhiệm vụ ──\n" +
-          "▸ /login\n" +
-          "▸ /config {loai} {id}\n" +
-          "▸ /tasks {type} [nick] [env]\n" +
-          "▸ /claim {id} {type} [nick] [env]\n\n" +
-          "── Đơn hàng ──\n" +
-          "▸ /services\n" +
-          "▸ /order {svc} {link} {qty}\n" +
-          "▸ /status {order}\n" +
-          "▸ /balance\n" +
-          "▸ /cancel {order}\n" +
-          "▸ /boost {order}\n\n" +
-          "▸ /help\n" +
-          "▸ Nhắn thường — AI trả lời\n" +
-          "▸ /{lệnh} — lệnh bot (không qua AI)\n" +
-          "━━━━━━━━━━━━━━━━"
+        `▸ Không rõ lệnh: ${text.split(/\s+/)[0]}\nGõ /help`
       );
-    } else if (lower === "/photo" || lower === "photo") {
-      const result = await sendPhoto(chatId, DEMO_PHOTO, "✦ Ảnh demo (≤ 5MB)");
-      if (result?.ok === false) await sendMessage(chatId, `✖ ${result.error}`);
-    } else if (lower === "/help" || lower === "help") {
-      await sendMessage(
-        chatId,
-        "━━━━━━━━━━━━━━━━\n📖 LỆNH CHI TIẾT\n━━━━━━━━━━━━━━━━\n\n" +
-          "TIKTOK\n" +
-          "/tiktok username\n" +
-          "/video https://vm.tiktok.com/...\n" +
-          "/search {từ khóa} | {số lượng}\n" +
-          "  vd: /search mèo cute | 10\n" +
-          "  (mặc định 5 video, max 20)\n\n" +
-          "NHIỆM VỤ (session)\n" +
-          "/login — test PHPSESSID\n" +
-          "/config loai id\n" +
-          "/tasks type [nickchay] [envCode]\n" +
-          "/claim id type [nickchay] [envCode]\n\n" +
-          "ĐƠN HÀNG (API key)\n" +
-          "/services — danh mục\n" +
-          "/order service link qty [cmt]\n" +
-          "/status order hoặc order1,2\n" +
-          "/balance\n" +
-          "/cancel order\n" +
-          "/boost order\n\n" +
-          "AI\n" +
-          "Nhắn thường (không bắt đầu bằng /) — AI\n" +
-          "Ảnh/file ≤5MB gửi kèm tin thường\n" +
-          "/{lệnh} — chỉ lệnh, không gọi AI\n\n" +
-          "API BANK (user + admin)\n" +
-          "/thueapibank — thuê (ngày 1k · tháng 25k · năm 200k)\n" +
-          "/checkpay /tkapi /mystatus\n" +
-          "/giftapibank {goi} {id} — admin tặng\n\n" +
-          "Env Vercel: GEMINI_API_KEY, API_BASE,\n" +
-          "ACCESS_TOKEN, API_KEY, ZALO_SECRET_TOKEN\n" +
-          "━━━━━━━━━━━━━━━━"
-      );
-    } else if (lower === "/keyboard") {
-      const r = await setChatKeyboard(chatId, {
-        keyboard: [
-          [{ text: "/help" }, { text: "/balance" }],
-          [{ text: "/services" }, { text: "/login" }],
-          [{ text: "Ẩn bàn phím" }],
-        ],
-        resize_keyboard: true,
-      });
-      if (r?.ok === false) await sendMessage(chatId, "Keyboard chưa hỗ trợ.");
-      else await sendMessage(chatId, "✦ Đã hiện bàn phím");
-    } else if (lower === "/hidekb" || lower === "ẩn bàn phím" || lower === "ẩn") {
-      await deleteChatKeyboard(chatId);
-      await sendMessage(chatId, "✦ Đã ẩn bàn phím");
-    } else if (text && text.trim().startsWith("/")) {
-      // Lệnh / không khớp — không gọi AI
-      await sendMessage(chatId, `▸ Không rõ lệnh: ${text.split(/\s+/)[0]}\nGõ /help xem danh sách lệnh.`);
-    } else if (text || message.photo || message.document) {
-      // ========== AI – tin nhắn thường (không bắt đầu bằng /) ==========
-      const prompt = (text || "").trim() || "Hãy mô tả nội dung đính kèm.";
-      let waitId = null;
-      try {
-        try {
-          const gifRes = await sendPhoto(chatId, LOADING_GIF, "⏳ AI đang xử lý...");
-          if (gifRes && gifRes.ok !== false) {
-            waitId = extractMessageId(gifRes);
-          }
-        } catch (_) {}
-        if (!waitId) {
-          waitId = await sendWaiting(chatId, "⏳ AI đang trả lời...");
-        }
-        await sendChatAction(chatId, "typing").catch(() => {});
-        let imageUrl = null;
-        let fileUrl = null;
-        let fileName = null;
-        if (message.photo) {
-          const ph = Array.isArray(message.photo) ? message.photo[message.photo.length - 1] : message.photo;
-          imageUrl = ph?.file_url || ph?.url || message.photo_url || null;
-        }
-        if (message.document) {
-          const sz = message.document.file_size || 0;
-          if (sz && sz > 5 * 1024 * 1024) {
-            await clearWaiting(chatId, waitId);
-            await sendMessage(chatId, "✖ File vượt 5MB, gửi file nhỏ hơn nhé.");
-            return res.status(200).json({ ok: true });
-          }
-          fileUrl = message.document.file_url || message.document.url || null;
-          fileName = message.document.file_name || message.document.name || "file";
-          const mt = (message.document.mime_type || "").toLowerCase();
-          if (!imageUrl && mt.startsWith("image/")) imageUrl = fileUrl;
-        }
-        const reply = await chatGrok(chatId, prompt, { imageUrl, fileUrl, fileName });
-        await clearWaiting(chatId, waitId);
-        const chunks = [];
-        let s = reply;
-        while (s.length > 3500) {
-          chunks.push(s.slice(0, 3500));
-          s = s.slice(3500);
-        }
-        chunks.push(s);
-        for (const c of chunks) {
-          await sendMessage(chatId, c);
-        }
-      } catch (e) {
-        await clearWaiting(chatId, waitId);
-        await sendMessage(chatId, `✖ AI lỗi: ${e.message}`);
-      }
+      return res.status(200).json({ ok: true });
     }
 
+    // no AI — ignore plain text unless rent flow already handled
+    return res.status(200).json({ ok: true, note: "ignored" });
+  } catch (e) {
+    console.error("webhook error:", e);
     return res.status(200).json({ ok: true });
-  } catch (err) {
-    console.error("Webhook error:", err);
-    return res.status(200).json({ ok: true, error: String(err.message || err) });
   }
 };
