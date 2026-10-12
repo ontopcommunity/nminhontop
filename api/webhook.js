@@ -169,6 +169,32 @@ module.exports = async function handler(req, res) {
     const args = text.split(/\s+/).slice(1);
     const isAdmin = !ADMIN_CHAT_ID || String(chatId) === String(ADMIN_CHAT_ID);
 
+    const fromName =
+      message.from?.name ||
+      message.from?.display_name ||
+      message.from?.full_name ||
+      message.chat?.name ||
+      "";
+    const fromId = message.from?.id || "";
+
+    // Lần đầu vào bot: chào + lưu DB + báo admin
+    try {
+      const reg = await callRentBot(chatId, "/__register_visitor", isAdmin, {
+        action: "register_visitor",
+        meta: { name: fromName, fromId: String(fromId) },
+      });
+      if (reg.isNew) {
+        await deliverReplies(chatId, reg);
+        // admin đã nhận qua sideEffects trong deliverReplies
+        // user mới: nếu chỉ "vào" không gửi lệnh thì vẫn chào xong return
+        if (!text || !String(text).trim()) {
+          return res.status(200).json({ ok: true, note: "welcome_new" });
+        }
+      }
+    } catch (e) {
+      console.warn("register_visitor fail", e.message);
+    }
+
     // ===== USER: chỉ thuê API =====
     if (!isAdmin) {
       if (!isRentRelated(text)) {
