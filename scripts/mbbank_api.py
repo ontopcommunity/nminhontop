@@ -438,12 +438,11 @@ def fetch_and_show_history_all(mb, days: int = 30) -> None:
         except TypeError:
             break
 
+    # sort mới → cũ
     def sort_key(x):
         d = (x.get("_sort") or x.get("date") or "").strip()
-        # chuẩn hoá về sortable: yyyymmddhhmmss
         nums = re.findall(r"\d+", d)
         if len(nums) >= 3:
-            # dd/mm/yyyy or yyyy-mm-dd
             if len(nums[0]) == 4:
                 y, m, day = nums[0], nums[1], nums[2]
             else:
@@ -451,11 +450,10 @@ def fetch_and_show_history_all(mb, days: int = 30) -> None:
             h = nums[3] if len(nums) > 3 else "00"
             mi = nums[4] if len(nums) > 4 else "00"
             s = nums[5] if len(nums) > 5 else "00"
-            return f"{y.zfill(4)}{m.zfill(2)}{day.zfill(2)}{h.zfill(2)}{mi.zfill(2)}{s.zfill(2)}"
+            return y.zfill(4) + m.zfill(2) + day.zfill(2) + h.zfill(2) + mi.zfill(2) + s.zfill(2)
         return d
 
-    import re as _re
-    merged.sort(key=sort_key, reverse=True)  # GD mới nhất lên trên
+    merged.sort(key=sort_key, reverse=True)  # GD moi nhat len tren
     # unique thô theo date+amount+desc
     seen = set()
     unique = []
@@ -702,20 +700,16 @@ def feat_interest(mb) -> None:
     pause()
 
 
-def abbrev_bank(name: str, code: str = "") -> str:
-    """Viết tắt tên ngân hàng cho bảng nhiều cột."""
+def abbrev_bank(name, code=""):
     n = (name or "").strip()
     c = (code or "").strip().upper()
-    # ưu tiên mã ngắn
     if c and len(c) <= 6:
         return c
-    # bỏ từ thừa
     for w in ("Ngân hàng", "Ngan hang", "Thương mại", "Cổ phần", "TNHH", "MTV", "Việt Nam", "Viet Nam"):
         n = n.replace(w, "")
     n = " ".join(n.split())
     if len(n) <= 10:
         return n or c or "?"
-    # lấy chữ cái đầu mỗi từ
     parts = [p for p in n.split() if p]
     if len(parts) >= 2:
         return "".join(p[0] for p in parts if p[0].isalnum()).upper()[:8] or n[:8]
@@ -729,7 +723,6 @@ def feat_banks(mb) -> None:
     try:
         data = mb.getBankList()
         banks = list(g(data, "listBank", "bankList", default=[]) or [])
-        # (code, abbrev)
         items = []
         for b in banks:
             code = str(g(b, "bankCode", "code", default="") or "")
@@ -738,19 +731,19 @@ def feat_banks(mb) -> None:
         items = sorted(set(items), key=lambda x: x.upper())
         cols = 7
         col_w = 9
-        lines = [t(C.GRN, f"  Tổng: {len(items)} NH  ·  {cols} cột (viết tắt)"), ""]
+        lines = [t(C.GRN, "  Tong: %s NH  ·  %s cot (viet tat)" % (len(items), cols)), ""]
         row = []
-        for i, ab in enumerate(items, 1):
-            cell = f"{ab:<{col_w}}"[:col_w]
+        for ab in items:
+            cell = ("%s" % ab)[:col_w].ljust(col_w)
             row.append(t(C.CYN, cell))
             if len(row) == cols:
                 lines.append("  " + "".join(row))
                 row = []
         if row:
             lines.append("  " + "".join(row))
-        box(" NGÂN HÀNG ", lines, 64)
+        box(" NGAN HANG ", lines, 64)
     except Exception as e:
-        print(t(C.RED, f"  Lỗi: {e}"))
+        print(t(C.RED, "  Loi: %s" % e))
     pause()
 
 
